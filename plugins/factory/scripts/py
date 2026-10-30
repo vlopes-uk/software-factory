@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Portable Python launcher for the factory plugin (Linux, macOS, Windows/Git Bash).
+# Usage: bash scripts/py <script.py> [args...]
+# Tries python3, python, then the Windows launcher "py -3", and skips the Microsoft
+# Store "python3" alias stub (which exists but is not a real interpreter).
+export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
+for candidate in python3 python "py -3"; do
+  # shellcheck disable=SC2086
+  if $candidate -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    exec $candidate "$@"
+  fi
+done
+echo "factory: Python 3.9+ not found. Install it from https://www.python.org/downloads/ " \
+     "(Windows: tick 'Add python.exe to PATH'), then restart Claude Code." >&2
+exit 127

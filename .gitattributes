@@ -1,0 +1,3 @@
+# Keep LF endings so the bash launchers work when this repo is cloned on Windows.
+* text=auto eol=lf
+*.png binary

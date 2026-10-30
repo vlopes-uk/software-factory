@@ -35,6 +35,10 @@ Your prompt gives you the PR (`owner/repo#n`), the local clone, the product repo
    - **web:** tokens rather than hard-coded values; every UI-SPEC state; accessibility
 6. **Scope.** Look for scope creep and new dependencies not covered by an ADR.
 
+## Change requests
+
+If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.
+
 ## Report
 
 Post one review with `gh pr review <n> --repo <repo> --comment --body-file <file>`. The author's own account can't approve, so the verdict goes in the body:

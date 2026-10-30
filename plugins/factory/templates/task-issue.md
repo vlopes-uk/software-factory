@@ -1,10 +1,11 @@
 **Repo:** the `api` repo for `be` tasks, the `web` repo for `fe` tasks
 **Title:** `[T-NN] <task title>`
-**Labels:** `factory:task`, plus `be` or `fe`
+**Labels:** `factory:task`, plus `be` or `fe`, plus `cr:CR-NNN` for change-request tasks
 
 ---
 
 Implements owner/<product>-product#<story> (ACs: AC1, AC2)
+Change request: CR-NNN   <!-- only for change-request tasks; omit for baseline tasks -->
 Depends on owner/<product>-api#<n>, owner/<product>-web#<n>
 
 ### What

@@ -4,11 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  release:
+    types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval)
 permissions:
   contents: read
   id-token: write        # OIDC to Azure (deploy job)
 jobs:
   build-test:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,3 +43,21 @@ jobs:
       # Replace with the deploy step for the ADR-chosen host:
       # App Service:     azure/webapps-deploy@v3 (app-name: ${{ vars.API_APP_NAME }}, package: publish)
       # Container Apps:  azure/container-apps-deploy-action@v2
+  deploy-prod:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: prod        # required reviewer = the human; configured by /factory:devops setup
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: ${{ github.event.release.tag_name }} }
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: az deployment group create -g ${{ vars.AZURE_RG }} -f infra/main.bicep -p env=prod
+      - run: dotnet publish src/*.Api -c Release -o publish
+      # same host-specific deploy step as deploy-dev, pointed at the prod app name

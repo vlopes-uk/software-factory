@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Factory gate entry point: bash scripts/gate <command> [args...]  (see gate.py for commands)
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec bash "$here/py" "$here/gate.py" "$@"

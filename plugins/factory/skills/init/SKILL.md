@@ -3,7 +3,7 @@ name: init
 description: Initialise the software factory in the product repo (state, config for the product/api/web GitHub repos, folders, labels, code-repo scaffolding).
 disable-model-invocation: true
 argument-hint: "[owner] [product-name]"
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py *) Bash(gh label create *) Bash(gh repo view *) Bash(gh repo create *) Bash(gh repo clone *) Bash(gh auth status *) Bash(git *) Bash(dotnet --version) Bash(node --version) Bash(npm --version) Read Write Edit
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh label create *) Bash(gh repo view *) Bash(gh repo create *) Bash(gh repo clone *) Bash(gh auth status *) Bash(git *) Bash(dotnet --version) Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" --version) Bash(node --version) Bash(npm --version) Read Write Edit
 ---
 
 # Initialise the factory
@@ -12,11 +12,11 @@ Run this from the **product repo**, the one that will hold the specs. It works b
 
 ## Result of initialisation
 
-!`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py init`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" init`
 
 ## Current config
 
-!`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py config`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" config`
 
 ## Your job
 
@@ -45,7 +45,7 @@ Run this from the **product repo**, the one that will hold the specs. It works b
    | `qa:changes-requested` | `d93f0b` | QA reviewer requested changes |
 
 5. **Code repo guidance.** In each local code clone, offer to add a `CLAUDE.md` from `${CLAUDE_PLUGIN_ROOT}/templates/code-repo/CLAUDE.api.md` or `CLAUDE.web.md`, filling in the product repo name, and commit it on a branch with a PR. Don't scaffold application code here; that is task T-00 of the plan.
-6. **Toolchain check.** Report the output of `dotnet --version` (needs 10.x), `node --version` (LTS) and `npm --version`. Missing tools only matter on the machine where `/factory:build` runs.
+6. **Toolchain check.** Report the output of `bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" --version` (Python 3.9+, which the factory's gates need; on Windows `python` or `py` is fine, `python3` isn't required), `dotnet --version` (needs 10.x), `node --version` (LTS) and `npm --version`. Missing tools only matter on the machine where `/factory:build` runs.
 7. In the product repo, add to `CLAUDE.md` (offer to do it):
    ```
    ## Software factory

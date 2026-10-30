@@ -67,6 +67,7 @@ Every factory role reads this file. These are the **fixed** choices. Only the de
 - **API:** Azure App Service (Linux) or Azure Container Apps, chosen in an ADR. The default is App Service for a single API and Container Apps when there are multiple services or background workers.
 - **IaC: Bicep** in each code repo's `infra/`. Environments are `dev` and `prod`, with `staging` optional.
 - **CI/CD: GitHub Actions.** Azure login uses **OIDC federated credentials** (`azure/login`), with no stored secrets. The CI templates are `${CLAUDE_PLUGIN_ROOT}/templates/ci/`.
+- Production deploys: publishing a GitHub release triggers each repo's `deploy-prod` job, which waits for the human's approval on the `prod` environment (`/factory:devops release`). The operations design lives in `OPERATIONS.md`, next to ARCHITECTURE.md.
 - Required PR checks: build, format or lint, typecheck, tests, and the contract test (api). Branch protection on `main` requires PRs and 1 review.
 - Observability: Application Insights for both; the SPA uses the JS SDK and the connection string from config.
 

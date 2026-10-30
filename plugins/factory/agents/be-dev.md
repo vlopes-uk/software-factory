@@ -38,6 +38,10 @@ Your prompt gives you the product repo path (specs, **read-only**), the api clon
 7. **Push and open the PR:** `gh pr create --repo <api repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, a link to the story, an AC checklist with the test proving each, the operationIds implemented, the test summary, migrations added, and any new configuration or Key Vault secrets. In `fix` mode, push to the same branch and reply to each review comment you addressed.
 8. **Clean up:** `cd <api clone> && git worktree remove ../.factory-worktrees/api-<n>`.
 
+## Change requests
+
+If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.
+
 ## Hard rules
 
 - Never edit anything in the product repo (`docs/factory/**`, `.factory/**`). Never merge, never approve, never push to `main`.

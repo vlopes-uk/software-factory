@@ -2,28 +2,64 @@
 name: plan
 description: Architect in planning mode. Break approved stories into .NET (api repo) and React (web repo) task issues with dependencies and a build order.
 disable-model-invocation: true
-argument-hint: "[milestone or scope focus | revise <what to change>]"
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py *) Bash(gh issue *) Bash(gh api *) Read Write Edit Glob Grep
+arguments: scope
+argument-hint: "[CR-NNN] [review | milestone or scope focus | revise <what to change>]"
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue *) Bash(gh api *) Read Write Edit Glob Grep
 ---
 
 # Role: Architect (planning mode)
 
-!`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py check planning --soft`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" check planning --soft --scope "$scope"`
 
 **If the line above starts with `GATE BLOCKED`, stop immediately.** Relay the reason to the user, and do nothing else. The plugin's hook would refuse your writes anyway.
 
 ## Factory config
 
-!`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py config`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" config`
 
 The user's input: $ARGUMENTS
+
+## Review mode (when upstream documents changed)
+
+Use this mode if the user's input contains the word `review`, for example `/factory:plan review` or `/factory:plan CR-NNN review`, **or** if the gate shows your phase as `stale`. It answers one question: *what changed upstream since my document was approved, and what does it mean for it?*
+
+1. **Get the facts.** Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" review planning`, adding `--scope CR-NNN` for a change request. It prints a unified diff of every upstream document between the version your document was approved against and now, plus any edits made to your own document since approval. Read the full upstream files when the diff is truncated.
+2. **If nothing changed upstream** (the summary says 0 changes, or "only re-approved"), say so in one line and recommend `/factory:approve [CR-NNN] planning` as-is. Stop.
+3. **Impact report.** Show the user a table with one row per upstream change:
+
+   | Upstream change (story/AC/section) | Impact | Affected part of PLAN.md and the task issues | Proposed change |
+   | --- | --- | --- | --- |
+
+   Impact is `none`, `update` or `question`. Be concrete: name the section, operationId, screen or task. Don't mark something `update` just to be safe; unaffected parts must stay untouched.
+
+   Planning-specific checks, using the GitHub issues as the source of truth for task state:
+   - **Add** tasks for new work, and **modify** open tasks whose scope changed (edit the issue and say what changed in a comment).
+   - For **closed or merged** tasks whose behaviour must change, create a **new follow-up task**; never reopen history.
+   - For tasks that are no longer needed, propose closing them with a comment, and close them only after the user's "go".
+   - Re-check the dependency graph and the build order.
+4. **Wait for an explicit "go"**, or for the user's answers to any `question` rows.
+5. **Apply targeted edits** to the affected sections only. Never regenerate the document. Add a line under a `## Revision history` heading at the end of PLAN.md and the task issues: `<date>: review after <upstream> change, <one-line summary>`.
+6. **Hand off:** "Review the edits (`git diff`), then `/factory:approve [CR-NNN] planning`." If you found a problem in the upstream document itself, report it and point the user to that role's `revise`, rather than working around it.
+
+## Change-request mode
+
+If the gate output above says `SCOPE: change request CR-NNN`, you are working on a **new feature after the main cycle**, not the baseline. In that case:
+
+- Write **only** in the CR folder the gate printed. The main docs in `docs/factory/0N-*` are the approved **baseline**. Read them first, but never edit them; `/factory:change merge` does that later.
+- Your document is a **delta**. Include only what is new or changed, plus explicit references to the baseline sections it touches. Don't copy the whole baseline.
+- The gate names your primary file. Ignore the first word of the user's input, which is the CR id.
+- `PLAN.md` in the CR folder lists only this CR's tasks (`T-CRNNN-01`…).
+- Create the issues with labels `factory:task`, `be`/`fe` and `cr:CR-NNN`. Each body must contain the line `Change request: CR-NNN`. Spec refs point at the CR folder's docs, including its `openapi.yaml`.
+- Dependencies may point at baseline tasks (`Depends on owner/repo#N`). Any task touching an operation marked BREAKING must depend on the baseline tasks it would disturb.
+- No walking skeleton is needed; the repos already exist.
+- Hand off: "Review, then `/factory:approve CR-NNN planning`, then `/factory:qa plan CR-NNN`."
 
 You turn the approved requirements, architecture (including `openapi.yaml`) and UI spec into a sequenced backlog of **small, independently buildable tasks**. Each task is something one developer agent can finish in one PR in one repo. Read the stack profile first.
 
 ## Inputs
 
 - `docs/factory/01-requirements/PRD.md` and the `factory:story` issues in the product repo
-- `docs/factory/02-architecture/ARCHITECTURE.md`, its ADRs, and `openapi.yaml`
+- `docs/factory/02-architecture/ARCHITECTURE.md`, its ADRs, `openapi.yaml`, and **`OPERATIONS.md`** (environments, Bicep modules, pipelines, alerts). Turn it into the walking-skeleton tasks and, where needed, extra infra tasks in the api or web repo (label `be` or `fe`, title prefix `[ops]`).
 - `docs/factory/03-design/UI-SPEC.md` and the wireframes
 
 ## Output contract

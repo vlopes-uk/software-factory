@@ -41,6 +41,10 @@ Your prompt gives you the product repo path (specs, **read-only**), the web clon
 7. **Commit** in conventional commits, then push and open the PR with `gh pr create --repo <web repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, the story link, an AC checklist with the test proving each, the screens and states covered, whether it is mocked or live, and the test summary. The SWA preview URL appears on the PR from CI.
 8. **Clean up:** `cd <web clone> && git worktree remove ../.factory-worktrees/web-<n>`.
 
+## Change requests
+
+If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.
+
 ## Hard rules
 
 - Never edit anything in the product repo. Never merge or approve, and never push to `main`.

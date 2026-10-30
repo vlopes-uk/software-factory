@@ -17,14 +17,14 @@ The Architect's `openapi.yaml` is the binding contract between the two code repo
 | Phase | Command | Role | Output |
 | --- | --- | --- | --- |
 | requirements | `/factory:po <idea>` | Product Owner | `PRD.md` + epics/stories (product repo) |
-| architecture | `/factory:architect` | Architect | `ARCHITECTURE.md`, ADRs, **`openapi.yaml`** |
+| architecture | `/factory:architect` + `/factory:devops plan` | Architect + DevOps | `ARCHITECTURE.md`, ADRs, **`openapi.yaml`**, `OPERATIONS.md` |
 | design | `/factory:design` | UI Designer | `UI-SPEC.md` (React components, tokens) + HTML wireframes |
 | planning | `/factory:plan` | Architect | `PLAN.md` + `be` issues in api, `fe` issues in web |
 | test-plan | `/factory:qa plan` | QA | `TEST-PLAN.md` (AC → xUnit / Vitest / Playwright) |
-| build | `/factory:build api#12` / `web#7` | .NET / React dev subagents | Branch + PR in that repo |
+| build | `/factory:build next` / `story S-03` / `api#12` | .NET / React dev subagents | Branch + PR in that repo |
 | review | `/factory:qa review api#31` | QA reviewer subagent | Review + `qa:*` label |
 
-Gate commands (human only): `/factory:approve <phase>`, `/factory:status`, `/factory:init`.
+Gate commands (human only): `/factory:approve <phase>` / `CR-NNN <phase>` / `merge CR-NNN`, `/factory:status`, `/factory:init`. New features: `/factory:change`.
 
 ## Install
 
@@ -34,7 +34,13 @@ claude plugin install factory@software-factory
 ```
 Or push this folder to GitHub, then run `/plugin marketplace add <owner>/<repo>` and `/plugin install factory@software-factory`.
 
-Requirements: Claude Code, `python3`, `git`, and the `gh` CLI authenticated (`gh auth login`). Where builds run, you also need the .NET 10 SDK, Node LTS, and Docker (for Testcontainers).
+Requirements: Claude Code, **Git** (on Windows: Git for Windows, which provides Git Bash), **Python 3.9+**, and the `gh` CLI authenticated (`gh auth login`).
+
+**Windows notes**
+- Install Python from python.org and tick "Add python.exe to PATH". The plugin finds `python3`, `python` or `py -3`, so the missing `python3` command on Windows is fine, and the Microsoft Store placeholder alias is skipped.
+- Install Git for Windows. The plugin's gates and hooks run in Git Bash, which Claude Code uses on Windows when it is installed.
+- Keep LF line endings for this repo (`.gitattributes` does this) so the bash launchers keep working.
+- All documents are read and written as UTF-8, so accents and symbols are safe on Windows consoles. Where builds run, you also need the .NET 10 SDK, Node LTS, and Docker (for Testcontainers).
 
 ## Use
 
@@ -55,6 +61,70 @@ cd ~/code/myapp-product && claude
 /factory:qa review api#2
 # you review and merge the PR
 ```
+
+## Choosing what gets built
+
+```text
+/factory:build next          # the next ready task: story priority (must > should > could), then plan order
+/factory:build story S-03    # every ready task of one story, BE and FE in parallel
+/factory:build api#12        # one specific task (add "fix" to address QA feedback on its PR)
+```
+
+`gate.py tasks` reads the task issues, their `Depends on` links, open PRs and story priorities from GitHub, and the build gates from `.factory/`. It classifies every task as READY, WAITING (dependency open), IN-REVIEW (PR open), BLOCKED (developer asked a question), GATED (build phase closed for its scope) or DONE. `next` and `story` show you the selection and start only after your "go". `/factory:status` includes the same task overview.
+
+## DevOps (GitHub + Azure), kept lean
+
+One command, no extra gate. `OPERATIONS.md` is approved together with the architecture.
+
+| Command | When | What |
+| --- | --- | --- |
+| `/factory:devops plan [CR-NNN]` | after `/factory:architect` | `OPERATIONS.md`: environments, Azure resources and naming, Bicep modules, CI/CD, secrets, alerts, backups and rollback, monthly cost estimate |
+| `/factory:devops setup` | once, before the walking skeletons | generates `ops/bootstrap-azure.sh` (RGs, app registration + OIDC federated credentials, RG-scoped role, Key Vault, budget alert) and `ops/bootstrap-github.sh` (dev/prod environments with you as prod reviewer, variables, branch protection), then walks you through them |
+| `/factory:devops preview <dev\|prod>` | before infra changes ship | Bicep `what-if`: create / modify / delete per resource |
+| `/factory:devops release` | to ship | readiness checks, changelog, api-before-web ordering, `gh release create`; each repo's `deploy-prod` job then **waits for your approval** in GitHub |
+| `/factory:devops diagnose [run]` | when CI/CD or Azure fails | reads failed logs (+ App Insights), classifies the failure, offers a fix PR |
+
+Guardrails (hook-enforced):
+- no `az ... delete/purge`, no Complete-mode deployments
+- no direct prod deploys; prod goes only through a GitHub release plus the `prod` environment approval
+- the agent never holds prod credentials, and secrets are never printed
+
+## When upstream documents change: review mode
+
+When you re-approve a document (for example the PRD after `/factory:po revise ...`), everything downstream becomes **stale**. Don't just re-approve; run the owning role's review mode:
+
+```text
+/factory:architect review          # also: /factory:design review, /factory:plan review, /factory:qa review-plan
+/factory:architect CR-001 review   # same for change requests; /factory:po CR-001 review if main moved under a CR
+```
+
+1. `gate.py review <phase>` prints the exact diff of each upstream document between the version this phase was approved against and now. Every approval stores a snapshot in `.factory/snapshots/`; older approvals fall back to git history.
+2. The role produces an **impact report** with one row per upstream change: `none` / `update` / `question`, the exact section, operationId, screen or task affected, and the proposed change. The Architect also classifies contract changes as additive or **BREAKING**. Planning never reopens closed tasks; it adds follow-ups instead.
+3. Nothing is edited until you say "go". Edits are targeted, and a `Revision history` line is added. If upstream was only re-approved with no content change, the review says re-approving as-is is safe.
+
+## New features after the cycle started: change requests
+
+```text
+/factory:change new Online payments     # creates CR-001 (docs/factory/changes/CR-001-online-payments/)
+/factory:po CR-001                       # requirements delta: new + modified stories
+/factory:approve CR-001 requirements
+/factory:architect CR-001                # delta + full CR openapi.yaml; flags BREAKING changes
+/factory:design CR-001                   # or "No UI changes"
+/factory:approve CR-001 architecture
+/factory:approve CR-001 design
+/factory:plan CR-001                     # tasks labelled cr:CR-001
+/factory:approve CR-001 planning
+/factory:qa plan CR-001
+/factory:approve CR-001 test-plan
+/factory:build api#40                    # CR tasks build like any other
+/factory:change merge CR-001             # folds the deltas into the main docs
+/factory:approve merge CR-001            # human: main is re-baselined, CR closed
+```
+
+- Each CR is gated on its own phases **and** on the approved main baseline. A CR in progress never blocks main builds or other CRs.
+- The CR's `openapi.yaml` is the full contract (baseline plus the change), so developers on CR tasks build against one file.
+- **Merge safety:** the gate refuses `approve merge` unless main's contract is byte-identical to the CR's. It also refuses if another CR changed the main contract after this CR's architecture was approved; run `/factory:architect CR-001 rebase` and re-approve.
+- To change requirements that are still in the *first* cycle, use `/factory:po revise ...` as before.
 
 ## How the gates work
 
