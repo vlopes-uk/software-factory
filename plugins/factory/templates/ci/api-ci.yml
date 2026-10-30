@@ -1,0 +1,42 @@
+# .github/workflows/ci.yml in the api repo (T-00-api installs this)
+name: api-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  id-token: write        # OIDC to Azure (deploy job)
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore
+      - run: dotnet build --no-restore -warnaserror
+      - run: dotnet format --verify-no-changes --no-restore
+      - run: dotnet test --no-build --collect:"XPlat Code Coverage" --logger trx
+      - run: dotnet list package --vulnerable --include-transitive
+  deploy-dev:
+    if: github.ref == 'refs/heads/main'
+    needs: build-test
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: az deployment group create -g ${{ vars.AZURE_RG }} -f infra/main.bicep -p env=dev
+      - run: dotnet publish src/*.Api -c Release -o publish
+      # Replace with the deploy step for the ADR-chosen host:
+      # App Service:     azure/webapps-deploy@v3 (app-name: ${{ vars.API_APP_NAME }}, package: publish)
+      # Container Apps:  azure/container-apps-deploy-action@v2

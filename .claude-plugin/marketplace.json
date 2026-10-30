@@ -1,0 +1,14 @@
+{
+  "name": "software-factory",
+  "owner": { "name": "Vitor Lopes" },
+  "description": "Role-based agent factory for Claude Code.",
+  "plugins": [
+    {
+      "name": "factory",
+      "source": "./plugins/factory",
+      "description": "PO, Architect, UI Designer, BE/FE Devs and QA with human phase gates.",
+      "version": "0.1.0",
+      "category": "development"
+    }
+  ]
+}

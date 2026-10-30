@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SCR-01 · Screen name (wireframe)</title>
+<style>
+  /* Paste the tokens from UI-SPEC.md here; wireframes use tokens only. */
+  :root { --color-primary:#2b59c3; --color-surface:#ffffff; --color-muted:#f1f3f5; --color-text:#1c1e21; --color-border:#ced4da; --radius:8px; --font-body:system-ui, sans-serif; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:var(--font-body); color:var(--color-text); background:var(--color-surface); }
+  .note { position:fixed; right:12px; bottom:12px; font-size:12px; background:#fff8c5; padding:6px 10px; border-radius:var(--radius); }
+  header, main, aside, footer { border:1px dashed var(--color-border); border-radius:var(--radius); padding:16px; margin:12px; }
+  .box { background:var(--color-muted); border-radius:var(--radius); padding:16px; margin:8px 0; }
+  button { background:var(--color-primary); color:#fff; border:0; border-radius:var(--radius); padding:10px 16px; font:inherit; }
+  button:focus-visible { outline:3px solid var(--color-text); outline-offset:2px; }
+  @media (min-width:768px) { .layout { display:grid; grid-template-columns:240px 1fr; } }
+</style>
+</head>
+<body>
+  <header>Header · logo · navigation</header>
+  <div class="layout">
+    <aside>Sidebar region</aside>
+    <main>
+      <h1>Screen title</h1>
+      <div class="box">Primary content region: what goes here and why (story S-01)</div>
+      <button type="button">Primary action</button>
+    </main>
+  </div>
+  <footer>Footer</footer>
+  <div class="note">Wireframe · SCR-01 · states: empty / loading / error described in UI-SPEC.md</div>
+</body>
+</html>
