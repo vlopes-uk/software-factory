@@ -9,6 +9,13 @@ allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue v
 
 # Build: $ARGUMENTS
 
+## Story and epic sync (runs automatically)
+
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks sync --apply`
+
+A story closes when every task that implements it is closed, which happens when you merge its PR. An epic closes when all its stories are closed. If new open work later points at a closed story or epic (for example a change-request task), it is reopened. **If the sync output above contains `SYNC APPLIED` or `SYNC FAILED` lines, the first line of your reply must report them**, for example "Closed on GitHub: story S-02 (all tasks done), epic E-01." Say nothing about the sync when it's up to date or unavailable.
+
+
 ## Gate status
 
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" status --brief`

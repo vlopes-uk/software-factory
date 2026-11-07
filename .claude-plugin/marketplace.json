@@ -7,7 +7,7 @@
       "name": "factory",
       "source": "./plugins/factory",
       "description": "PO, Architect, UI Designer, BE/FE Devs and QA with human phase gates.",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "category": "development"
     }
   ]

@@ -458,7 +458,57 @@ def test_task_selection_next_and_story():
         assert "TASKS UNAVAILABLE" in r.stdout and "Traceback" not in r.stderr, r
 
 
+def test_story_and_epic_sync():
+    import os
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        cfg = json.loads((Path(repo) / ".factory/config.json").read_text())
+        cfg["repos"]["product"]["github"] = "Me/BK-product"          # case differs from issue links
+        cfg["repos"]["api"]["github"] = "me/bk-api"
+        cfg["repos"]["web"]["github"] = "me/bk-web"
+        (Path(repo) / ".factory/config.json").write_text(json.dumps(cfg))
+        lab = lambda *n: [{"name": x} for x in n]
+        epic = lambda num, eid, state="OPEN": {"number": num, "title": f"[{eid}] epic", "state": state,
+                                               "labels": lab("factory:epic"), "body": ""}
+        story = lambda num, sid, ep, state="OPEN": {"number": num, "title": f"[{sid}] story", "state": state,
+                                                    "labels": lab("factory:story", "priority:must"),
+                                                    "body": f"Part of #{ep}\n\nAs a user..."}
+        task = lambda num, tid, s, state: {"number": num, "title": f"[{tid}] t", "state": state,
+                                           "labels": lab("factory:task"),
+                                           "body": f"Implements me/bk-product#{s} (ACs: AC1)\n"}
+        fx = {"issues": {
+            "me/bk-product": [epic(1, "E-01"), epic(2, "E-02"), epic(3, "E-03", "CLOSED"),
+                              story(10, "S-01", 1), story(11, "S-02", 2), story(12, "S-03", 3, "CLOSED"),
+                              story(13, "S-04", 2)],
+            "me/bk-api": [task(20, "T-01", 10, "CLOSED"), task(21, "T-02", 11, "CLOSED"),
+                          task(22, "T-03", 12, "OPEN")],
+            "me/bk-web": [task(30, "T-04", 10, "CLOSED"), task(31, "T-05", 11, "OPEN")]},
+            "prs": {}}
+        f = Path(repo) / "fx.json"
+        f.write_text(json.dumps(fx))
+        env = dict(os.environ, FACTORY_GH_FIXTURE=str(f))
+        T = lambda *a: subprocess.run([sys.executable, str(GATE), "tasks", *a], cwd=repo,
+                                      capture_output=True, text=True, env=env).stdout
+        out = T("sync")
+        assert "SYNC WOULD: close story S-01" in out, out          # all tasks closed (api + web)
+        assert "close epic E-01" in out                            # its only story now closed
+        assert "story S-02" not in out and "epic E-02" not in out  # S-02 has an open task
+        assert "reopen story S-03" in out and "reopen epic E-03" in out   # new open work (e.g. a CR)
+        assert "S-04" not in out                                   # no tasks yet -> untouched
+        assert "Dry run" in out
+        out = T("sync", "--apply")
+        assert "SYNC APPLIED: close story S-01" in out and "Dry run" not in out, out
+        # everything consistent -> nothing to do
+        fx["issues"]["me/bk-api"] = [task(20, "T-01", 10, "CLOSED")]
+        fx["issues"]["me/bk-web"] = []
+        fx["issues"]["me/bk-product"] = [epic(1, "E-01", "CLOSED"), story(10, "S-01", 1, "CLOSED")]
+        f.write_text(json.dumps(fx))
+        assert "up to date" in T("sync")
+
+
 if __name__ == "__main__":
+    test_story_and_epic_sync()
     test_task_selection_next_and_story()
     test_windows_python_launcher_and_encoding()
     test_hook_azure_guardrails()

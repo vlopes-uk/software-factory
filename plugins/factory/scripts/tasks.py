@@ -7,6 +7,9 @@ Reads GitHub (via `gh`) and the local gate state. Run through the gate wrapper:
   bash scripts/gate tasks story S-03           the tasks of one story
   bash scripts/gate tasks plan <target> [x]    what /factory:build injects: dispatches on target
                                                (next | story S-NN | api#N | web#N | owner/repo#N)
+  bash scripts/gate tasks sync [--apply]       close stories whose tasks are all closed, and epics
+                                               whose stories are all closed (reopen if new open work
+                                               appears). Dry run unless --apply.
 
 Status of a task (first match wins):
   done        issue closed
@@ -52,7 +55,8 @@ def issues(repo: str, label: str) -> list[dict]:
     global _fixture
     if os.environ.get("FACTORY_GH_FIXTURE"):
         _fixture = _fixture or json.loads(open(os.environ["FACTORY_GH_FIXTURE"], encoding="utf-8").read())
-        return [i for i in _fixture.get("issues", {}).get(repo, [])
+        pool = {k.lower(): v for k, v in _fixture.get("issues", {}).items()}
+        return [i for i in pool.get(repo.lower(), [])
                 if label in {l["name"] for l in i.get("labels", [])}]
     return _gh_json(["issue", "list", "--repo", repo, "--label", label, "--state", "all",
                      "--limit", "500", "--json", "number,title,state,labels,body"])
@@ -62,7 +66,7 @@ def open_prs(repo: str) -> list[dict]:
     global _fixture
     if os.environ.get("FACTORY_GH_FIXTURE"):
         _fixture = _fixture or json.loads(open(os.environ["FACTORY_GH_FIXTURE"], encoding="utf-8").read())
-        return _fixture.get("prs", {}).get(repo, [])
+        return {k.lower(): v for k, v in _fixture.get("prs", {}).items()}.get(repo.lower(), [])
     return _gh_json(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200",
                      "--json", "number,body,headRefName"])
 
@@ -82,22 +86,34 @@ def line_refs(body: str, prefix: str) -> list[tuple[str, int]]:
     refs = []
     for line in (body or "").splitlines():
         if line.strip().lower().startswith(prefix):
-            refs += [(r, int(n)) for r, n in REF.findall(line)]
+            refs += [(r.lower(), int(n)) for r, n in REF.findall(line)]
     return refs
 
 
 def collect() -> dict:
     cfg = load_config()
     repos = cfg["repos"]
-    product = repos["product"]["github"]
-    code = {k: repos[k]["github"] for k in ("api", "web") if k in repos}
+    product = repos["product"]["github"].lower()
+    code = {k: repos[k]["github"].lower() for k in ("api", "web") if k in repos}
 
     stories = {}
     for s in issues(product, "factory:story"):
         m = re.search(r"\[(S-\d+)\]", s["title"])
         prio = next((l["name"] for l in s.get("labels", []) if l["name"] in PRIORITY), None)
+        epic_refs = line_refs(s.get("body"), "part of")
+        epic_refs += [(product, int(n)) for line in (s.get("body") or "").splitlines()
+                      if line.strip().lower().startswith("part of")
+                      for n in re.findall(r"(?<![\w/.-])#(\d+)", line)]
         stories[(product, s["number"])] = {"id": m.group(1) if m else f"#{s['number']}",
-                                           "priority": prio, "title": s["title"]}
+                                           "priority": prio, "title": s["title"],
+                                           "number": s["number"], "state": s["state"].lower(),
+                                           "epics": epic_refs}
+    epics = {}
+    for e in issues(product, "factory:epic"):
+        m = re.search(r"\[(E-\d+)\]", e["title"])
+        epics[(product, e["number"])] = {"id": m.group(1) if m else f"#{e['number']}",
+                                         "number": e["number"], "title": e["title"],
+                                         "state": e["state"].lower()}
 
     tasks, by_ref = [], {}
     for key, repo in code.items():
@@ -121,11 +137,12 @@ def collect() -> dict:
                 "story": story["id"] if story else None,
                 "priority": story["priority"] if story else None,
                 "deps": line_refs(body, "depends on"),
+                "implements": impl,
                 "prs": in_review,
             }
             tasks.append(task)
             by_ref[(repo, t["number"])] = task
-    return {"tasks": tasks, "by_ref": by_ref, "stories": stories}
+    return {"tasks": tasks, "by_ref": by_ref, "stories": stories, "epics": epics, "product": product}
 
 
 def classify(data: dict) -> None:
@@ -171,6 +188,79 @@ def sort_key(t: dict):
     return (PRIORITY.get(t["priority"], 3), int(tnum[0]) if tnum else 9999, t["tid"], t["number"])
 
 
+# ---------------------------------------------------------------- story / epic sync
+
+def plan_sync(data: dict) -> list[dict]:
+    """Close/reopen actions for stories (by their tasks) and epics (by their stories)."""
+    actions = []
+    product = data["product"]
+    story_state = {k: s["state"] for k, s in data["stories"].items()}
+    for key, s in sorted(data["stories"].items(), key=lambda kv: kv[0][1]):
+        mine = [t for t in data["tasks"] if key in t["implements"]]
+        if not mine:
+            continue
+        open_tasks = [t["ref"] for t in mine if t["state"] != "closed"]
+        done = [t["ref"] for t in mine if t["state"] == "closed"]
+        if s["state"] == "open" and not open_tasks:
+            actions.append({"op": "close", "kind": "story", "repo": product, "number": s["number"],
+                            "label": s["id"], "comment":
+                            f"All {len(done)} task(s) done: {', '.join(done)}. "
+                            "Closed automatically by the software factory."})
+            story_state[key] = "closed"
+        elif s["state"] == "closed" and open_tasks:
+            actions.append({"op": "reopen", "kind": "story", "repo": product, "number": s["number"],
+                            "label": s["id"], "comment":
+                            f"Reopened: new open work implements this story: {', '.join(open_tasks)}. "
+                            "Reopened automatically by the software factory."})
+            story_state[key] = "open"
+    for key, e in sorted(data["epics"].items(), key=lambda kv: kv[0][1]):
+        mine = [k for k, s in data["stories"].items() if key in s["epics"]]
+        if not mine:
+            continue
+        open_stories = [data["stories"][k]["id"] for k in mine if story_state[k] != "closed"]
+        if e["state"] == "open" and not open_stories:
+            ids = ", ".join(data["stories"][k]["id"] for k in mine)
+            actions.append({"op": "close", "kind": "epic", "repo": product, "number": e["number"],
+                            "label": e["id"], "comment":
+                            f"All {len(mine)} stories done: {ids}. Closed automatically by the software factory."})
+        elif e["state"] == "closed" and open_stories:
+            actions.append({"op": "reopen", "kind": "epic", "repo": product, "number": e["number"],
+                            "label": e["id"], "comment":
+                            f"Reopened: open stories {', '.join(open_stories)}. "
+                            "Reopened automatically by the software factory."})
+    return actions
+
+
+def apply_action(a: dict) -> str:
+    args = ["issue", a["op"], str(a["number"]), "--repo", a["repo"], "--comment", a["comment"]]
+    if os.environ.get("FACTORY_GH_FIXTURE"):
+        return "fixture: gh " + " ".join(args[:4])
+    out = subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip() or "gh failed")
+    return "ok"
+
+
+def sync(data: dict, apply: bool) -> None:
+    actions = plan_sync(data)
+    if not actions:
+        print("SYNC: stories and epics are up to date.")
+        return
+    verb = "APPLIED" if apply else "WOULD"
+    for a in actions:
+        line = f"{a['op']} {a['kind']} {a['label']} ({a['repo']}#{a['number']})"
+        if apply:
+            try:
+                apply_action(a)
+                print(f"SYNC {verb}: {line}")
+            except Exception as e:
+                print(f"SYNC FAILED: {line}: {e}")
+        else:
+            print(f"SYNC {verb}: {line}")
+    if not apply:
+        print("Dry run. Add --apply to make these changes.")
+
+
 # ---------------------------------------------------------------- output
 
 def row(t: dict) -> str:
@@ -211,6 +301,9 @@ def cmd(args: list[str]) -> None:
         return
     classify(data)
     tasks = data["tasks"]
+    if sub == "sync":
+        sync(data, apply="--apply" in args)
+        return
     if sub == "list":
         open_tasks = [t for t in tasks if t["status"] != "done"]
         show(open_tasks, f"TASKS: {len(open_tasks)} open of {len(tasks)}")

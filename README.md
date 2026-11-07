@@ -72,6 +72,16 @@ cd ~/code/myapp-product && claude
 
 `gate.py tasks` reads the task issues, their `Depends on` links, open PRs and story priorities from GitHub, and the build gates from `.factory/`. It classifies every task as READY, WAITING (dependency open), IN-REVIEW (PR open), BLOCKED (developer asked a question), GATED (build phase closed for its scope) or DONE. `next` and `story` show you the selection and start only after your "go". `/factory:status` includes the same task overview.
 
+## Stories and epics close themselves
+
+Every `/factory:status` and `/factory:build` first runs `gate.py tasks sync --apply`:
+- a **story** closes when every task that implements it (`Implements <product>#N`) is closed. Merging a PR with `Closes #N` closes its task.
+- an **epic** closes when all its stories (`Part of #N`) are closed
+- if new open work later points at a closed story or epic (for example a change-request task), it is **reopened**
+- each close or reopen leaves a comment saying why. Stories without tasks are left alone.
+
+Preview without changing anything: `bash <plugin>/scripts/gate tasks sync`.
+
 ## DevOps (GitHub + Azure), kept lean
 
 One command, no extra gate. `OPERATIONS.md` is approved together with the architecture.
