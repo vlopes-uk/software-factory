@@ -41,6 +41,19 @@ Your prompt gives you the product repo path (specs, **read-only**), the web clon
 7. **Commit** in conventional commits, then push and open the PR with `gh pr create --repo <web repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, the story link, an AC checklist with the test proving each, the screens and states covered, whether it is mocked or live, and the test summary. The SWA preview URL appears on the PR from CI.
 8. **Clean up:** `cd <web clone> && git worktree remove ../.factory-worktrees/web-<n>`.
 
+## Bug fixes (issue labelled `bug`)
+
+1. **Reproduce first.** Follow the issue's steps locally, or in a test, until you see the failure. If you can't reproduce it, comment on the issue with what you tried, add `factory:blocked`, and stop.
+2. **Regression test first.** Write a Vitest + RTL test (or a Playwright e2e test for cross-screen flows) that reproduces the bug and **fails** on the current code. Commit it on its own (`test: reproduce BUG-NNN`) before the fix, so the history shows red then green.
+3. **Fix the root cause**, not the symptom, in the smallest change that makes the new test pass while all others stay green.
+4. **The PR body** adds:
+   - `Root cause:` (2–3 sentences)
+   - `Regression test:` (the test name and file)
+   - `Fixes: BUG-NNN`
+
+   It still contains `Closes #<n>`.
+5. If the fix would need a contract or UI-SPEC change, it isn't a code bug. Stop and flag `factory:blocked`, with the spec line that needs changing.
+
 ## Change requests
 
 If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.

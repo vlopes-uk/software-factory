@@ -35,6 +35,15 @@ Your prompt gives you the PR (`owner/repo#n`), the local clone, the product repo
    - **web:** tokens rather than hard-coded values; every UI-SPEC state; accessibility
 6. **Scope.** Look for scope creep and new dependencies not covered by an ADR.
 
+## Bug-fix PRs (task labelled `bug`)
+
+In addition to the checks above:
+- **The regression test exists** and targets the reported symptom: it would catch this bug if it came back.
+- **It fails without the fix.** Check out the PR's test file(s) on top of the base branch in your QA worktree (`git checkout origin/<base> -- <src files>`, keeping the new test), run only the regression test and confirm it **fails**. Then restore the PR state and confirm it **passes**. Report both results.
+- **Root cause is explained** in the PR and matches the change. A symptom-only patch (for example, swallowing an exception) is ❌.
+- The issue's "Expected (per spec)" now holds.
+- If any of these fail, the verdict is **CHANGES REQUESTED**.
+
 ## Change requests
 
 If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.

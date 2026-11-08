@@ -10,7 +10,8 @@ Blocks (exit 2, reason on stderr):
      request (docs/factory/changes/CR-NNN-*/0N-*) - while that phase's upstream
      phases are not approved, or into an unregistered CR folder.
   3. `gh pr create` while neither main nor any open change request has build open.
-  4. destructive Azure commands (delete/purge, Complete-mode deployments) and direct
+  4. agents changing build autonomy (.factory/config.json "autonomy", `gate autonomy set|preset`)
+  5. destructive Azure commands (delete/purge, Complete-mode deployments) and direct
      production deploys (they must go through a GitHub release + prod environment approval).
 Applies to the main session and to subagents alike.
 """
@@ -63,6 +64,24 @@ if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
     if "/.factory/snapshots/" in path.replace("\\", "/") or path.replace("\\", "/").startswith(".factory/snapshots/"):
         block("Blocked: .factory/snapshots/ holds the approved versions used for reviews; "
               "only gate.py writes there.")
+    norm = path.replace("\\", "/")
+    if norm.endswith(".factory/config.json") and gate:
+        keys = ["autonomy", "preset", *gate.AUTONOMY_KEYS, *gate.AUTONOMY_PRESETS]
+        if tool == "Write":
+            try:
+                new_auto = json.loads(inp.get("content") or "{}").get("autonomy")
+                cur = json.loads(gate.CONFIG.read_text(encoding="utf-8")).get("autonomy") if gate.CONFIG.exists() else None
+            except Exception:
+                new_auto, cur = None, None
+            if new_auto != cur and not (new_auto is None and cur is None):
+                block("Blocked: build autonomy is the human's decision. Ask the user to run "
+                      "/factory:autonomy (preset or set) themselves.")
+        else:
+            edits = inp.get("edits") or [inp]
+            text = " ".join(str(e.get("old_string", "")) + " " + str(e.get("new_string", "")) for e in edits)
+            if any(k in text for k in keys):
+                block("Blocked: build autonomy is the human's decision. Ask the user to run "
+                      "/factory:autonomy themselves.")
     if gate and state:
         hit = gate.path_scope_phase(path, state)
         if hit:
@@ -81,6 +100,13 @@ if tool == "Bash":
     if re.search(r"\bgate(?:\.py)?[\"']?\s+approve\b", cmd):
         block("Blocked: phase approval is a human gate. "
               "Ask the user to run /factory:approve ... themselves.")
+    if re.search(r"\bgate(?:\.py)?[\"']?\s+autonomy\s+(set|preset)\b", cmd):
+        block("Blocked: build autonomy is the human's decision. Ask the user to run "
+              "/factory:autonomy themselves.")
+    if ".factory/config.json" in cmd.replace("\\", "/") and re.search(
+            r">|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i|\bpython3?\b|\bperl\b|\bjq\b", cmd):
+        block("Blocked: edit .factory/config.json with the Write/Edit tools (autonomy settings are "
+              "human-only via /factory:autonomy).")
     if ".factory/snapshots" in cmd and re.search(r">|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i|\btouch\b|\brm\b|\bpython3?\b|\bperl\b", cmd) \
             and not re.search(r"scripts[/\\\\]gate", cmd):
         block("Blocked: .factory/snapshots/ is managed by gate.py (read it, never write it).")

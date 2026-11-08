@@ -7,6 +7,7 @@ Reads GitHub (via `gh`) and the local gate state. Run through the gate wrapper:
   bash scripts/gate tasks story S-03           the tasks of one story
   bash scripts/gate tasks plan <target> [x]    what /factory:build injects: dispatches on target
                                                (next | story S-NN | api#N | web#N | owner/repo#N)
+  bash scripts/gate tasks bug-id               next free BUG-NNN id across the api/web repos
   bash scripts/gate tasks sync [--apply]       close stories whose tasks are all closed, and epics
                                                whose stories are all closed (reopen if new open work
                                                appears). Dry run unless --apply.
@@ -37,6 +38,9 @@ import sys
 import gate
 
 PRIORITY = {"priority:must": 0, "priority:should": 1, "priority:could": 2}
+# Bug fixes (label `bug` + `severity:*`): critical/high jump ahead of all feature work,
+# medium ranks with "should" stories, low with "could".
+SEVERITY = {"severity:critical": -2, "severity:high": -1, "severity:medium": 1, "severity:low": 2}
 REF = re.compile(r"([\w.-]+/[\w.-]+)#(\d+)")
 _fixture: dict | None = None
 
@@ -120,7 +124,7 @@ def collect() -> dict:
         prs = open_prs(repo)
         for t in issues(repo, "factory:task"):
             body = t.get("body") or ""
-            m = re.search(r"\[(T-[\w-]+)\]", t["title"])
+            m = re.search(r"\[((?:T|BUG)-[\w-]+)\]", t["title"])
             cr = re.search(r"^\s*Change request:\s*(CR-\d{3,})", body, re.M | re.I)
             impl = line_refs(body, "implements")
             story = stories.get(impl[0]) if impl else None
@@ -136,6 +140,8 @@ def collect() -> dict:
                 "cr": cr.group(1).upper() if cr else None,
                 "story": story["id"] if story else None,
                 "priority": story["priority"] if story else None,
+                "severity": next((l["name"] for l in t.get("labels", []) if l["name"] in SEVERITY), None)
+                            if any(l["name"] == "bug" for l in t.get("labels", [])) else None,
                 "deps": line_refs(body, "depends on"),
                 "implements": impl,
                 "prs": in_review,
@@ -185,7 +191,8 @@ def classify(data: dict) -> None:
 
 def sort_key(t: dict):
     tnum = re.findall(r"\d+", t["tid"])
-    return (PRIORITY.get(t["priority"], 3), int(tnum[0]) if tnum else 9999, t["tid"], t["number"])
+    rank = SEVERITY[t["severity"]] if t.get("severity") else PRIORITY.get(t["priority"], 3)
+    return (rank, 0 if t.get("severity") else 1, int(tnum[0]) if tnum else 9999, t["tid"], t["number"])
 
 
 # ---------------------------------------------------------------- story / epic sync
@@ -264,7 +271,8 @@ def sync(data: dict, apply: bool) -> None:
 # ---------------------------------------------------------------- output
 
 def row(t: dict) -> str:
-    prio = (t["priority"] or "-").replace("priority:", "")
+    prio = ("BUG-" + t["severity"].replace("severity:", "")) if t.get("severity") else \
+        (t["priority"] or "-").replace("priority:", "")
     extra = f"  ({t['why']})" if t["why"] else ""
     cr = f" {t['cr']}" if t["cr"] else ""
     return (f"  {t['status'].upper():9} {t['ref']:10} {t['tid'] or '-':10} story={t['story'] or '-':6} "
@@ -301,6 +309,10 @@ def cmd(args: list[str]) -> None:
         return
     classify(data)
     tasks = data["tasks"]
+    if sub == "bug-id":
+        nums = [int(n) for t in tasks for n in re.findall(r"\[BUG-(\d+)\]", t["title"])]
+        print(f"BUG-ID: BUG-{(max(nums) + 1 if nums else 1):03d}")
+        return
     if sub == "sync":
         sync(data, apply="--apply" in args)
         return
@@ -314,8 +326,10 @@ def cmd(args: list[str]) -> None:
             show([t for t in tasks if t["status"] not in ("done",)], "Why (open tasks):")
             return
         t = ready[0]
-        print(f"NEXT: {t['ref']} {t['tid']} (story {t['story'] or '-'}, "
-              f"{(t['priority'] or 'no priority').replace('priority:', '')}){' ' + t['cr'] if t['cr'] else ''}")
+        level = (f"bug, {t['severity'].replace('severity:', '')}" if t.get("severity")
+                 else (t['priority'] or 'no priority').replace('priority:', ''))
+        print(f"NEXT: {t['ref']} {t['tid']} (story {t['story'] or '-'}, {level})"
+              f"{' ' + t['cr'] if t['cr'] else ''}")
         print(f"  {t['title']}")
         show(ready[1:4], "Runners-up (also ready):")
     elif sub == "story":

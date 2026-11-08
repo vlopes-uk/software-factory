@@ -20,7 +20,7 @@ Run this from the **product repo**, the one that will hold the specs. It works b
 
 ## Your job
 
-1. **Repos.** The factory uses three GitHub repos: `product` (specs and stories, which is this repo), `api` (.NET backend) and `web` (React frontend). Ask the user for the GitHub owner and product name (args: `$0` `$1`) and confirm the names. Suggest `<product>-product`, `<product>-api` and `<product>-web`, with local clones as siblings (`../<product>-api`, `../<product>-web`). Then write `.factory/config.json` with the real names. Keep `"stack": "dotnet-react-azure"` and `"label": "be"/"fe"`.
+1. **Repos.** The factory uses three GitHub repos: `product` (specs and stories, which is this repo), `api` (.NET backend) and `web` (React frontend). Ask the user for the GitHub owner and product name (args: `$0` `$1`) and confirm the names. Suggest `<product>-product`, `<product>-api` and `<product>-web`, with local clones as siblings (`../<product>-api`, `../<product>-web`). Then update `.factory/config.json` with the real names, using the Edit tool on the `repos` values only. Keep `"stack"`, `"label": "be"/"fe"` and the **`autonomy` section unchanged**: agents can't change autonomy, and the hook refuses edits to it. Tell the user that the build-phase autonomy defaults to **assisted** (QA runs automatically after each PR, with 1 automatic fix round) and that `/factory:autonomy` shows or changes it.
    If the user wants specs inside the API repo instead, set `repos.product` equal to `repos.api` and keep `path: "."`.
 2. **GitHub.** `gh auth status`. For each repo in the config, check it exists (`gh repo view <repo>`). Offer to create any that are missing (`gh repo create <repo> --private`) and to clone `api` and `web` to their configured paths. Ask before creating anything.
 3. **Folder access.** Claude Code only sees the product repo by default. Add the code clones to the product repo's `.claude/settings.json`, merging with any existing content:
@@ -43,6 +43,11 @@ Run this from the **product repo**, the one that will hold the specs. It works b
    | `factory:blocked` | `000000` | Agent stopped: needs a human or an upstream fix |
    | `qa:passed` | `0e8a16` | QA reviewer passed the PR |
    | `qa:changes-requested` | `d93f0b` | QA reviewer requested changes |
+   | `bug` | `d73a4a` | Bug fix task (from /factory:bug) |
+   | `severity:critical` | `b60205` | Bug: data loss, security, prod down |
+   | `severity:high` | `d93f0b` | Bug: core journey broken, no workaround |
+   | `severity:medium` | `fbca04` | Bug: workaround exists |
+   | `severity:low` | `c5def5` | Bug: cosmetic / edge case |
 
 5. **Code repo guidance.** In each local code clone, offer to add a `CLAUDE.md` from `${CLAUDE_PLUGIN_ROOT}/templates/code-repo/CLAUDE.api.md` or `CLAUDE.web.md`, filling in the product repo name, and commit it on a branch with a PR. Don't scaffold application code here; that is task T-00 of the plan.
 6. **Toolchain check.** Report the output of `bash "${CLAUDE_PLUGIN_ROOT}/scripts/py" --version` (Python 3.9+, which the factory's gates need; on Windows `python` or `py` is fine, `python3` isn't required), `dotnet --version` (needs 10.x), `node --version` (LTS) and `npm --version`. Missing tools only matter on the machine where `/factory:build` runs.

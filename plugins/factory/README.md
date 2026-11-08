@@ -24,7 +24,7 @@ The Architect's `openapi.yaml` is the binding contract between the two code repo
 | build | `/factory:build next` / `story S-03` / `api#12` | .NET / React dev subagents | Branch + PR in that repo |
 | review | `/factory:qa review api#31` | QA reviewer subagent | Review + `qa:*` label |
 
-Gate commands (human only): `/factory:approve <phase>` / `CR-NNN <phase>` / `merge CR-NNN`, `/factory:status`, `/factory:init`. New features: `/factory:change`.
+Gate commands (human only): `/factory:approve <phase>` / `CR-NNN <phase>` / `merge CR-NNN`, `/factory:autonomy`, `/factory:status`, `/factory:init`. New features: `/factory:change`. Bugs: `/factory:bug`.
 
 ## Install
 
@@ -71,6 +71,45 @@ cd ~/code/myapp-product && claude
 ```
 
 `gate.py tasks` reads the task issues, their `Depends on` links, open PRs and story priorities from GitHub, and the build gates from `.factory/`. It classifies every task as READY, WAITING (dependency open), IN-REVIEW (PR open), BLOCKED (developer asked a question), GATED (build phase closed for its scope) or DONE. `next` and `story` show you the selection and start only after your "go". `/factory:status` includes the same task overview.
+
+## Reporting bugs
+
+```text
+/factory:bug On dev, two patients both got a confirmation for the same 10:00 slot
+```
+
+1. **Intake:** at most 4 questions (steps, expected vs actual, environment, evidence). Say "just file it" to skip.
+2. **Triage against the approved specs:**
+   - **code bug:** violates an acceptance criterion, the contract, a UI state or an NFR, so it becomes a fix task
+   - **spec gap:** the code does what the spec says, so it suggests `/factory:change new`
+   - **infra:** suggests `/factory:devops diagnose`
+3. **Severity** (critical / high / medium / low) and a duplicate check.
+4. **Draft, then "go":** creates `[BUG-NNN]` in the api or web repo with labels `factory:task`, `bug`, `be`/`fe`, `severity:*`. It links the story and AC it violates, includes the reproduction steps, and requires a **regression test that fails before the fix**.
+
+**Priority:** critical and high bugs come before all feature work in `/factory:build next`. Medium ranks with "should" stories, low with "could".
+
+**Fixing:**
+- The developer reproduces the bug, commits the failing test first, fixes the root cause, and explains it in the PR.
+- QA checks that the test fails on the base branch and passes on the PR.
+- A closed story with an open bug fix is reopened by the sync until the fix is merged.
+
+## Build autonomy: how much happens without you
+
+Planning approvals, merging PRs and production deploys **always** need you. Autonomy only shapes the build phase, and only you can change it (the hook blocks agents):
+
+```text
+/factory:autonomy                      # show the current setting
+/factory:autonomy preset assisted      # manual | assisted (default) | autopilot
+/factory:autonomy set max_fix_rounds 2 # fine-tune one setting
+```
+
+| Preset | QA after each PR | Auto-fix rounds | Asks before starting | Continues to next ready task |
+| --- | --- | --- | --- | --- |
+| manual | no (run `/factory:qa review` yourself) | 0 | yes | no |
+| **assisted** (default) | yes | 1 | yes | no |
+| autopilot | yes | 2 | no | yes (max 5 per run, 3 in parallel) |
+
+With auto QA on, each task runs as a chain: **developer → QA → (fix → QA) × rounds → stop**. Every run ends with a table showing ✅ ready to merge, ⚠️ needs you, or ⛔ blocked. Stored as `"autonomy"` in `.factory/config.json`. Add `no-qa` to a build command to skip QA for that run.
 
 ## Stories and epics close themselves
 

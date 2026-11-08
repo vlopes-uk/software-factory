@@ -507,7 +507,111 @@ def test_story_and_epic_sync():
         assert "up to date" in T("sync")
 
 
+def test_autonomy_settings_and_protection():
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        cfgp = Path(repo) / ".factory/config.json"
+        assert json.loads(cfgp.read_text())["autonomy"] == {"preset": "assisted"}
+        out = run(repo, "autonomy")[1]
+        assert out.startswith("AUTONOMY assisted: auto QA on, 1 auto-fix round(s), asks before starting")
+        assert "Merges and planning approvals always need you" in out
+        assert "Autonomy (build phase): assisted" in run(repo, "status")[1]
+
+        out = run(repo, "autonomy", "preset", "autopilot")[1]
+        assert "AUTONOMY SET: preset 'autopilot'" in out and "starts without asking" in out
+        assert "continues to next ready task (max 5 per run)" in out
+        out = run(repo, "autonomy", "set", "max_fix_rounds", "3")[1]
+        assert "max_fix_rounds = 3" in out and "3 auto-fix round(s)" in out
+        assert "between 0 and 3; nothing changed" in run(repo, "autonomy", "set", "max_fix_rounds", "9")[1]
+        assert "expects true/false" in run(repo, "autonomy", "set", "auto_qa", "maybe")[1]
+        assert "can't be automated" in run(repo, "autonomy", "set", "auto_merge", "true")[1]
+        assert "unknown preset" in run(repo, "autonomy", "preset", "yolo")[1]
+        assert "overrides cleared" in run(repo, "autonomy", "preset", "manual")[1]
+        assert "auto QA off" in run(repo, "autonomy")[1]
+
+        # hand-edited config: bad values are clamped/ignored with warnings, never crash
+        cfg = json.loads(cfgp.read_text())
+        cfg["autonomy"] = {"preset": "assisted", "max_parallel": 50, "auto_merge": True, "auto_qa": "yes", "foo": 1}
+        cfgp.write_text(json.dumps(cfg))
+        out = run(repo, "autonomy")[1]
+        assert "max_parallel' =50 clamped to 5" in out.replace("'max_parallel'=50", "max_parallel' =50") or "clamped to 5" in out
+        assert "'auto_merge' ignored" in out and "'auto_qa' must be true/false" in out and "unknown autonomy key 'foo'" in out
+
+        # hook: agents can't change autonomy, but can edit other config
+        def h(event):
+            return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event),
+                                  capture_output=True, text=True, cwd=repo).returncode
+        cur = json.loads(cfgp.read_text())
+        same = dict(cur, repos={"product": {"github": "me/p", "path": "."}})
+        changed = dict(cur, autonomy={"preset": "autopilot"})
+        assert h({"tool_name": "Write", "tool_input": {"file_path": str(cfgp), "content": json.dumps(same)}}) == 0
+        assert h({"tool_name": "Write", "tool_input": {"file_path": str(cfgp), "content": json.dumps(changed)}}) == 2
+        dropped = {k: v for k, v in cur.items() if k != "autonomy"}
+        assert h({"tool_name": "Write", "tool_input": {"file_path": str(cfgp), "content": json.dumps(dropped)}}) == 2
+        assert h({"tool_name": "Edit", "tool_input": {"file_path": str(cfgp), "old_string": '"preset": "assisted"',
+                                                       "new_string": '"preset": "autopilot"'}}) == 2
+        assert h({"tool_name": "Edit", "tool_input": {"file_path": str(cfgp), "old_string": "OWNER/PRODUCT-api",
+                                                       "new_string": "me/booking-api"}}) == 0
+        assert h({"tool_name": "MultiEdit", "tool_input": {"file_path": str(cfgp), "edits": [
+            {"old_string": "x", "new_string": "y"}, {"old_string": "\"max_fix_rounds\": 1", "new_string": "\"max_fix_rounds\": 3"}]}}) == 2
+        assert h({"tool_name": "Bash", "tool_input": {"command": 'bash "/p/scripts/gate" autonomy preset autopilot'}}) == 2
+        assert h({"tool_name": "Bash", "tool_input": {"command": 'bash "/p/scripts/gate" autonomy show'}}) == 0
+        assert h({"tool_name": "Bash", "tool_input": {"command": "sed -i s/assisted/autopilot/ .factory/config.json"}}) == 2
+
+
+def test_bug_priority_ids_and_story_reopen():
+    import os
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        cfgp = Path(repo) / ".factory/config.json"
+        cfg = json.loads(cfgp.read_text())
+        cfg["repos"]["product"]["github"] = "me/bk-product"
+        cfg["repos"]["api"]["github"] = "me/bk-api"
+        cfg["repos"]["web"]["github"] = "me/bk-web"
+        cfgp.write_text(json.dumps(cfg))
+        approve_all_main(repo)
+        lab = lambda *n: [{"name": x} for x in n]
+        story = lambda num, sid, prio, state="OPEN": {"number": num, "title": f"[{sid}] s", "state": state,
+                                                     "labels": lab("factory:story", f"priority:{prio}"), "body": ""}
+        task = lambda num, title, s, labels, state="OPEN": {"number": num, "title": title, "state": state,
+                                                            "labels": lab("factory:task", *labels),
+                                                            "body": f"Implements me/bk-product#{s}\n"}
+        fx = {"issues": {
+            "me/bk-product": [story(1, "S-01", "must"), story(2, "S-02", "should", "CLOSED"), story(3, "S-03", "could")],
+            "me/bk-api": [task(10, "[T-01] feature must", 1, ("be",)),
+                          task(11, "[BUG-001] low bug", 2, ("be", "bug", "severity:low"), "CLOSED"),
+                          task(12, "[BUG-002] medium bug", 2, ("be", "bug", "severity:medium"))],
+            "me/bk-web": [task(20, "[BUG-007] high bug", 2, ("fe", "bug", "severity:high")),
+                          task(21, "[T-09] feature could", 3, ("fe",))]},
+            "prs": {}}
+        f = Path(repo) / "fx.json"
+        f.write_text(json.dumps(fx))
+        env = dict(os.environ, FACTORY_GH_FIXTURE=str(f))
+        T = lambda *a: subprocess.run([sys.executable, str(GATE), "tasks", *a], cwd=repo,
+                                      capture_output=True, text=True, env=env).stdout
+        out = T("next")
+        assert out.startswith("NEXT: web#20 BUG-007 (story S-02, bug, high)"), out   # high bug beats a must feature
+        assert "api#10" in out                                                     # must feature is runner-up
+        listing = T("list")
+        order = [l.split()[1] for l in listing.splitlines() if l.startswith("  READY")]
+        assert order == ["web#20", "api#10", "api#12", "web#21"], order            # high > must > medium(=should) > could
+        assert "prio=BUG-high" in listing
+        assert T("bug-id").strip() == "BUG-ID: BUG-008"
+        # an open bug fix against a closed story reopens it; after the fix is merged it closes again
+        assert "reopen story S-02" in T("sync")
+        for t_ in fx["issues"]["me/bk-api"] + fx["issues"]["me/bk-web"]:
+            if t_["number"] in (12, 20):
+                t_["state"] = "CLOSED"
+        fx["issues"]["me/bk-product"][1]["state"] = "OPEN"
+        f.write_text(json.dumps(fx))
+        assert "close story S-02" in T("sync")
+
+
 if __name__ == "__main__":
+    test_bug_priority_ids_and_story_reopen()
+    test_autonomy_settings_and_protection()
     test_story_and_epic_sync()
     test_task_selection_next_and_story()
     test_windows_python_launcher_and_encoding()

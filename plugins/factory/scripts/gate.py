@@ -25,6 +25,8 @@ Usage:
   gate.py approve <phase>                 human-only (the hook blocks the model)
   gate.py approve CR-NNN <phase>          human-only
   gate.py approve merge CR-NNN            human-only: accept CR docs merged into main
+  gate.py autonomy [show | preset <manual|assisted|autopilot> | set <key> <value>]
+                                          build-phase autonomy (preset/set are human-only)
   gate.py tasks list|next|story S-NN|plan <target> [x]
                                           task readiness for /factory:build (see tasks.py)
   gate.py review <phase> [--scope CR-NNN] diff of upstream docs since this phase was approved
@@ -95,8 +97,137 @@ DOCS = ROOT / "docs" / "factory"
 CHANGES = DOCS / "changes"
 SNAP = ROOT / ".factory" / "snapshots"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+# ---------------------------------------------------------------- autonomy (build phase only)
+# Planning phases always need a human approval and merges always need a human: those are
+# not settings. Autonomy only shapes what happens *inside* the build phase.
+AUTONOMY_KEYS = {
+    # key: (type, min, max, description)
+    "auto_qa": (bool, None, None, "run the QA reviewer automatically on every PR a developer opens"),
+    "max_fix_rounds": (int, 0, 3, "automatic developer-fix -> QA re-check rounds when QA requests changes"),
+    "confirm_dispatch": (bool, None, None, "ask for 'go' before `next` / `story` start developers"),
+    "auto_continue": (bool, None, None, "after a task's chain ends, start the next ready task automatically"),
+    "max_tasks_per_run": (int, 1, 10, "cap on tasks one /factory:build run may start (auto_continue)"),
+    "max_parallel": (int, 1, 5, "developers running at the same time"),
+}
+AUTONOMY_PRESETS = {
+    "manual":    {"auto_qa": False, "max_fix_rounds": 0, "confirm_dispatch": True,
+                  "auto_continue": False, "max_tasks_per_run": 1, "max_parallel": 1},
+    "assisted":  {"auto_qa": True, "max_fix_rounds": 1, "confirm_dispatch": True,
+                  "auto_continue": False, "max_tasks_per_run": 3, "max_parallel": 3},
+    "autopilot": {"auto_qa": True, "max_fix_rounds": 2, "confirm_dispatch": False,
+                  "auto_continue": True, "max_tasks_per_run": 5, "max_parallel": 3},
+}
+NEVER_AUTONOMOUS = {"auto_merge", "auto_approve", "planning", "requirements", "architecture",
+                    "design", "test_plan", "test-plan", "approve", "merge", "deploy_prod", "prod"}
+DEFAULT_AUTONOMY = {"preset": "assisted"}
+
+
+def effective_autonomy(cfg: dict) -> tuple[dict, list[str]]:
+    """Return (settings, warnings) from cfg['autonomy']: preset defaults + validated overrides."""
+    raw = cfg.get("autonomy") or dict(DEFAULT_AUTONOMY)
+    warnings: list[str] = []
+    preset = raw.get("preset", DEFAULT_AUTONOMY["preset"])
+    if preset not in AUTONOMY_PRESETS:
+        warnings.append(f"unknown preset '{preset}', using 'assisted'")
+        preset = "assisted"
+    eff = dict(AUTONOMY_PRESETS[preset], preset=preset)
+    for k, v in raw.items():
+        if k == "preset":
+            continue
+        if k in NEVER_AUTONOMOUS or k.replace("-", "_") in NEVER_AUTONOMOUS:
+            warnings.append(f"'{k}' ignored: planning approvals, merges and prod deploys always need you")
+            continue
+        if k not in AUTONOMY_KEYS:
+            warnings.append(f"unknown autonomy key '{k}' ignored")
+            continue
+        typ, lo, hi, _ = AUTONOMY_KEYS[k]
+        if typ is bool:
+            if not isinstance(v, bool):
+                warnings.append(f"'{k}' must be true/false; kept {eff[k]}")
+                continue
+        else:
+            if isinstance(v, bool) or not isinstance(v, int):
+                warnings.append(f"'{k}' must be a number; kept {eff[k]}")
+                continue
+            if v < lo or v > hi:
+                warnings.append(f"'{k}'={v} clamped to {min(max(v, lo), hi)} (allowed {lo}-{hi})")
+                v = min(max(v, lo), hi)
+        eff[k] = v
+    return eff, warnings
+
+
+def autonomy_summary(eff: dict) -> str:
+    bits = [f"auto QA {'on' if eff['auto_qa'] else 'off'}"]
+    if eff["auto_qa"]:
+        bits.append(f"{eff['max_fix_rounds']} auto-fix round(s)")
+    bits.append("asks before starting" if eff["confirm_dispatch"] else "starts without asking")
+    if eff["auto_continue"]:
+        bits.append(f"continues to next ready task (max {eff['max_tasks_per_run']} per run)")
+    bits.append(f"max {eff['max_parallel']} in parallel")
+    return f"{eff['preset']}: " + ", ".join(bits) + ". Merges and planning approvals always need you."
+
+
+def parse_value(key: str, text: str):
+    typ = AUTONOMY_KEYS[key][0]
+    if typ is bool:
+        low = text.strip().lower()
+        if low in ("true", "on", "yes", "1"):
+            return True
+        if low in ("false", "off", "no", "0"):
+            return False
+        raise ValueError(f"{key} expects true/false")
+    return int(text)
+
+
+def cmd_autonomy(args: list[str]) -> None:
+    if not CONFIG.exists():
+        print("AUTONOMY: no .factory/config.json; run /factory:init first.")
+        return
+    cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+    sub = args[0].lower() if args else "show"
+    if sub == "preset":
+        name = (args[1] if len(args) > 1 else "").lower()
+        if name not in AUTONOMY_PRESETS:
+            print(f"AUTONOMY: unknown preset '{name}'. Choose: {', '.join(AUTONOMY_PRESETS)}")
+            return
+        cfg["autonomy"] = {"preset": name}  # a preset resets individual overrides
+        CONFIG.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        print(f"AUTONOMY SET: preset '{name}' (individual overrides cleared).")
+    elif sub == "set":
+        if len(args) < 3 or args[1] not in AUTONOMY_KEYS:
+            if len(args) > 1 and (args[1] in NEVER_AUTONOMOUS or args[1].replace("-", "_") in NEVER_AUTONOMOUS):
+                print(f"AUTONOMY: '{args[1]}' can't be automated: planning approvals, merges and prod "
+                      "deploys always need you.")
+                return
+            print("AUTONOMY: usage: set <key> <value>. Keys: " + ", ".join(AUTONOMY_KEYS))
+            return
+        try:
+            value = parse_value(args[1], args[2])
+        except ValueError as e:
+            print(f"AUTONOMY: {e}")
+            return
+        typ, lo, hi, _ = AUTONOMY_KEYS[args[1]]
+        if typ is int and not lo <= value <= hi:
+            print(f"AUTONOMY: {args[1]} must be between {lo} and {hi}; nothing changed.")
+            return
+        cfg.setdefault("autonomy", dict(DEFAULT_AUTONOMY))[args[1]] = value
+        CONFIG.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        print(f"AUTONOMY SET: {args[1]} = {json.dumps(value)}")
+    elif sub != "show":
+        print("AUTONOMY: usage: show | preset <manual|assisted|autopilot> | set <key> <value>")
+        return
+    eff, warnings = effective_autonomy(json.loads(CONFIG.read_text(encoding="utf-8")))
+    print("AUTONOMY " + autonomy_summary(eff))
+    for k, (typ, lo, hi, desc) in AUTONOMY_KEYS.items():
+        rng = "true/false" if typ is bool else f"{lo}-{hi}"
+        print(f"  {k:18} = {json.dumps(eff[k]):6} ({rng})  {desc}")
+    for w in warnings:
+        print(f"  WARNING: {w}")
+
+
 DEFAULT_CONFIG = {
     "stack": "dotnet-react-azure",
+    "autonomy": dict(DEFAULT_AUTONOMY),
     "repos": {
         "product": {"github": "OWNER/PRODUCT-product", "path": "."},
         "api": {"github": "OWNER/PRODUCT-api", "path": "../PRODUCT-api", "label": "be"},
@@ -373,6 +504,12 @@ def cmd_status(brief: bool) -> None:
                 continue
             cells = ", ".join(f"{short[p]}={s}" for p, s, _ in status_rows(cid, state, memo))
             print(f"  {cid}  {c['title']}\n      {cells}")
+    if CONFIG.exists():
+        try:
+            eff, _ = effective_autonomy(json.loads(CONFIG.read_text(encoding="utf-8")))
+            print("\nAutonomy (build phase): " + autonomy_summary(eff))
+        except (ValueError, OSError):
+            pass
     steps = next_steps(state, memo)
     if steps:
         print("\nNext:")
@@ -721,6 +858,8 @@ def main(argv: list[str]) -> None:
     pos = [a for a in args if not a.startswith("--")]
     if cmd == "init":
         cmd_init()
+    elif cmd == "autonomy":
+        cmd_autonomy([a for a in argv[1:] if a.strip()])
     elif cmd == "config":
         cmd_config()
     elif cmd == "status":

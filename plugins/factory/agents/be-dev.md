@@ -38,6 +38,19 @@ Your prompt gives you the product repo path (specs, **read-only**), the api clon
 7. **Push and open the PR:** `gh pr create --repo <api repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, a link to the story, an AC checklist with the test proving each, the operationIds implemented, the test summary, migrations added, and any new configuration or Key Vault secrets. In `fix` mode, push to the same branch and reply to each review comment you addressed.
 8. **Clean up:** `cd <api clone> && git worktree remove ../.factory-worktrees/api-<n>`.
 
+## Bug fixes (issue labelled `bug`)
+
+1. **Reproduce first.** Follow the issue's steps locally, or in a test, until you see the failure. If you can't reproduce it, comment on the issue with what you tried, add `factory:blocked`, and stop.
+2. **Regression test first.** Write an xUnit test (unit test with Moq, or a WebApplicationFactory integration test, whichever reproduces it most directly) that reproduces the bug and **fails** on the current code. Commit it on its own (`test: reproduce BUG-NNN`) before the fix, so the history shows red then green.
+3. **Fix the root cause**, not the symptom, in the smallest change that makes the new test pass while all others stay green.
+4. **The PR body** adds:
+   - `Root cause:` (2–3 sentences)
+   - `Regression test:` (the test name and file)
+   - `Fixes: BUG-NNN`
+
+   It still contains `Closes #<n>`.
+5. If the fix would need a contract or UI-SPEC change, it isn't a code bug. Stop and flag `factory:blocked`, with the spec line that needs changing.
+
 ## Change requests
 
 If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.
