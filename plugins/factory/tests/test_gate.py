@@ -236,6 +236,51 @@ def test_change_request_flow():
         assert code == 3 and "Rebase" in out, out
 
 
+def test_hook_allows_main_docs_during_merge():
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        approve_all_main(repo)
+        run(repo, "change", "new", "Payments")
+        f = "CR-001-payments"
+
+        def h(event):
+            return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event),
+                                  capture_output=True, text=True, cwd=repo).returncode
+
+        ui = {"tool_name": "Write", "tool_input": {"file_path": f"{repo}/docs/factory/03-design/UI-SPEC.md"}}
+        ui_sh = {"tool_name": "Bash", "tool_input": {"command": "echo x >> docs/factory/03-design/UI-SPEC.md"}}
+        prd = Path(repo) / "docs/factory/01-requirements/PRD.md"
+        original = prd.read_text()
+
+        def edit_prd_and_check(expected):
+            prd.write_text("prd edited by the merge")
+            assert status(repo)["main: requirements"] == "changed"
+            result = (h(ui), h(ui_sh))
+            prd.write_text(original)                       # restore: main is approved again
+            assert status(repo)["main: requirements"] == "approved"
+            assert result == (expected, expected), result
+
+        # no CR ready to merge: an edited PRD keeps downstream main docs blocked
+        edit_prd_and_check(2)
+        # the CR is only partly approved: still blocked
+        for sub, name in (("01-requirements", "REQUIREMENTS.md"), ("02-architecture", "ARCHITECTURE.md"),
+                          ("03-design", "UI-SPEC.md"), ("04-plan", "PLAN.md"), ("05-qa", "TEST-PLAN.md")):
+            cr_doc(repo, f, sub, name, "delta")
+        time.sleep(1.05)
+        assert run(repo, "approve", "CR-001", "requirements")[0] == 0
+        edit_prd_and_check(2)
+        # every CR phase approved: the merge may write every main doc
+        for ph in ("architecture", "design", "planning", "test-plan"):
+            time.sleep(1.05)
+            assert run(repo, "approve", "CR-001", ph)[0] == 0
+        edit_prd_and_check(0)
+        prd.write_text("prd edited by the merge")
+        assert h({"tool_name": "Write", "tool_input": {"file_path": f"{repo}/docs/factory/05-qa/TEST-PLAN.md"}}) == 0
+        # approval stays human-only
+        assert h({"tool_name": "Bash", "tool_input": {"command": "python3 /p/scripts/gate.py approve merge CR-001"}}) == 2
+
+
 def test_hook_change_request_paths():
     with tempfile.TemporaryDirectory() as repo:
         subprocess.run(["git", "init", "-q", repo], check=True)
@@ -673,6 +718,7 @@ if __name__ == "__main__":
     test_review_snapshots_and_diff()
     test_review_git_fallback_for_legacy_approvals()
     test_change_request_flow()
+    test_hook_allows_main_docs_during_merge()
     test_hook_change_request_paths()
     test_config_created_and_printed()
     test_hook_blocks_writes_into_gated_phase()

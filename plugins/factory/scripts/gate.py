@@ -371,6 +371,26 @@ def blockers(phase: str, scope, state: dict) -> list[str]:
     return out
 
 
+def mergeable_crs(state: dict) -> list[str]:
+    """Open CRs that `/factory:change merge` may currently fold into main: the same
+    preconditions as cmd_merge. While one exists, main docs being 'changed' or downstream
+    'stale' is the merge in progress, not an unapproved edit."""
+    main_recs = records(state, MAIN)
+    for p in DOC_PHASES:
+        rec = main_recs.get(p)
+        if rec is None or any(main_recs.get(d, {}).get("approved_at", "") > rec["approved_at"]
+                              for d in PHASES[p]["deps"]):
+            return []
+    out = []
+    for cid, c in state.get("changes", {}).items():
+        if c.get("status") != "open":
+            continue
+        memo: dict = {(p, MAIN): "approved" for p in DOC_PHASES}
+        if all(status_of(p, cid, state, memo) == "approved" for p in DOC_PHASES):
+            out.append(cid)
+    return out
+
+
 def path_scope_phase(path: str, state: dict | None = None):
     """Map a file path to (phase, scope) of the artifact folder containing it, or None.
     scope may be an unknown 'CR-NNN?' string when the folder isn't registered."""

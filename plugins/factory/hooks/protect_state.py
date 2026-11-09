@@ -37,6 +37,10 @@ def check_target(gate, state, phase, scope, how: str) -> None:
         block(f"Blocked: {scope.split(':', 1)[1]} is not a registered change request. "
               "Create CRs with /factory:change new <title>.")
     bl = gate.blockers(phase, scope, state)
+    if bl and scope is gate.MAIN and gate.mergeable_crs(state):
+        # A fully approved CR is being folded into main (/factory:change merge): main docs
+        # are 'changed' by the merge itself. The human still accepts it via /factory:approve merge.
+        return
     if bl:
         block(f"Blocked by factory gate: cannot {how} {gate.label(scope)} '{phase}' artifacts yet: "
               + "; ".join(bl) + ". Ask the user to approve upstream phases.")
