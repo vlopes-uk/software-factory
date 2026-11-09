@@ -27,6 +27,7 @@ Usage:
   gate.py approve merge CR-NNN            human-only: accept CR docs merged into main
   gate.py autonomy [show | preset <manual|assisted|autopilot> | set <key> <value>]
                                           build-phase autonomy (preset/set are human-only)
+  gate.py spec <api#N | web#N>            spec pack: only the spec excerpts that task references
   gate.py tasks list|next|story S-NN|plan <target> [x]
                                           task readiness for /factory:build (see tasks.py)
   gate.py review <phase> [--scope CR-NNN] diff of upstream docs since this phase was approved
@@ -858,6 +859,9 @@ def main(argv: list[str]) -> None:
     pos = [a for a in args if not a.startswith("--")]
     if cmd == "init":
         cmd_init()
+    elif cmd == "spec":  # spec pack for one task (reads GitHub via gh)
+        import specs
+        specs.cmd([a for a in argv[1:] if a.strip()])
     elif cmd == "autonomy":
         cmd_autonomy([a for a in argv[1:] if a.strip()])
     elif cmd == "config":

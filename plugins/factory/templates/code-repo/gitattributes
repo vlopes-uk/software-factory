@@ -1,0 +1,11 @@
+# Copy to the code repo root as .gitattributes (T-00 tasks do this).
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Rows are one per feature; concurrent PRs append different rows -> union merge, no conflict.
+CODEMAP.md merge=union
+
+# Generated or tool-owned: never hand-merge. Take main's version and regenerate.
+package-lock.json -diff linguist-generated
+**/Migrations/*ModelSnapshot.cs -diff linguist-generated

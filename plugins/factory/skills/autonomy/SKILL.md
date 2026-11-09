@@ -2,6 +2,7 @@
 name: autonomy
 description: Human-only. Show or change how autonomously the build phase runs (auto QA, fix rounds, confirmations, auto-continue). Planning approvals and merges always stay with the human.
 disable-model-invocation: true
+model: haiku
 arguments: action key value
 argument-hint: "[show | preset <manual|assisted|autopilot> | set <key> <value>]"
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *)

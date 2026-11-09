@@ -609,7 +609,61 @@ def test_bug_priority_ids_and_story_reopen():
         assert "close story S-02" in T("sync")
 
 
+def test_spec_pack_extracts_only_referenced_specs():
+    import os, shutil
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        cfgp = Path(repo) / ".factory/config.json"
+        cfg = json.loads(cfgp.read_text())
+        cfg["repos"]["product"]["github"] = "me/bk-product"
+        cfg["repos"]["api"]["github"] = "me/bk-api"
+        cfg["repos"]["web"]["github"] = "me/bk-web"
+        cfgp.write_text(json.dumps(cfg))
+        write(repo, "docs/factory/01-requirements/PRD.md",
+              "# PRD\n## 7. Stories\n### S-01 Create order\n- AC1: Given items, then created.\n"
+              "### S-02 List orders\n- AC1: lists them.\n## 8. NFRs\nfast\n")
+        shutil.copy(PLUGIN / "templates/openapi.yaml", Path(repo) / "docs/factory/02-architecture/openapi.yaml")
+        write(repo, "docs/factory/02-architecture/ARCHITECTURE.md",
+              "# Arch\n## 5. Decisions\nx\n## 6. Backend design\nOrders slice: handlers.\n### Orders\ndetail\n## 7. Frontend\ny\n")
+        write(repo, "docs/factory/02-architecture/adr/0001-database.md", "# ADR 0001: Azure SQL\nchosen")
+        write(repo, "docs/factory/02-architecture/adr/0002-hosting.md", "# ADR 0002: App Service")
+        write(repo, "docs/factory/03-design/UI-SPEC.md",
+              "# UI\n## 6. Screens\n### SCR-01 Orders list\nlist\n### SCR-02 Order form\nform states: empty, error\n## 7. Components\n")
+        write(repo, "docs/factory/05-qa/TEST-PLAN.md",
+              "# TP\n| Story · AC | Test case | Level |\n| --- | --- | --- |\n| S-01 · AC1 | TC-001 create | Integration |\n"
+              "| S-02 · AC1 | TC-002 list | Integration |\n")
+        body = ("Implements me/bk-product#1 (ACs: AC1)\n\n### Spec references (binding)\n"
+                "- `docs/factory/02-architecture/openapi.yaml`: operationIds `createOrder`, `deleteOrder`\n"
+                "- `ARCHITECTURE.md` §6 feature `Orders`; ADR 0001\n- `UI-SPEC.md` SCR-02\n- `TEST-PLAN.md` TC-001\n")
+        fx = {"issues": {"me/bk-product": [{"number": 1, "title": "[S-01] Create order", "state": "OPEN",
+                                             "labels": [{"name": "factory:story"}], "body": ""}],
+                         "me/bk-api": [{"number": 12, "title": "[T-03] createOrder", "state": "OPEN",
+                                        "labels": [{"name": "factory:task"}], "body": body}]}}
+        f = Path(repo) / "fx.json"
+        f.write_text(json.dumps(fx))
+        env = dict(os.environ, FACTORY_GH_FIXTURE=str(f))
+        out = subprocess.run([sys.executable, str(GATE), "spec", "api#12"], cwd=repo,
+                             capture_output=True, text=True, env=env).stdout
+        assert out.startswith("# Spec pack for me/bk-api#12"), out
+        assert "### S-01 Create order" in out and "S-02 List orders" not in out          # only its story
+        assert "operationId: createOrder" in out and "listOrders" not in out           # only its operation
+        assert "CreateOrderRequest:" in out and "ProblemDetails:" in out               # schemas it references (recursive)
+        assert "OrderPage" not in out                                                  # not unrelated schemas
+        assert "## Architecture §6" in out and "Orders slice" in out and "## 7. Frontend" not in out
+        assert "ADR 0001: Azure SQL" in out and "App Service" not in out
+        assert "### SCR-02 Order form" in out and "SCR-01 Orders list" not in out
+        assert "TC-001 create" in out and "TC-002" not in out
+        assert "- operationId deleteOrder" in out                                      # reported as missing
+        assert len(out) < len("".join(p.read_text() for p in (Path(repo) / "docs").rglob("*.md")) +
+                              (Path(repo) / "docs/factory/02-architecture/openapi.yaml").read_text())
+        bad = subprocess.run([sys.executable, str(GATE), "spec", "nonsense"], cwd=repo,
+                             capture_output=True, text=True, env=env).stdout
+        assert "SPEC PACK UNAVAILABLE" in bad
+
+
 if __name__ == "__main__":
+    test_spec_pack_extracts_only_referenced_specs()
     test_bug_priority_ids_and_story_reopen()
     test_autonomy_settings_and_protection()
     test_story_and_epic_sync()

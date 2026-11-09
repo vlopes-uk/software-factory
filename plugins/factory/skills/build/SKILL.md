@@ -75,7 +75,7 @@ Run this for each started task. Separate tasks' chains can run in parallel, up t
 
    Count the rounds yourself and **never exceed `max_fix_rounds`**. If a fix round makes no progress (the same failures again), stop early.
 4. **End state.** Record exactly one of:
-   - ✅ **Ready to merge:** QA passed (or QA is off and the developer's checks passed). Give the PR link.
+   - ✅ **Ready to merge:** QA passed (or QA is off and the developer's checks passed). Give the PR link. Being behind `main` doesn't matter; only a real conflict (`gh pr view --json mergeable` = `CONFLICTING`) needs `/factory:build fix <repo>#N`, which applies the cheap-rebase rules.
    - ⚠️ **Needs you:** QA still requests changes after the allowed rounds. Give the open issues in 3 lines max and the PR link.
    - ⛔ **Blocked:** the developer asked a question or the gate refused. Give the reason.
 5. **Continue** (only if `auto_continue` is true). When a chain ends and fewer than `max_tasks_per_run` tasks have started in this run, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks plan next` and start its `NEXT:` task the same way, without asking. Tasks that wait on unmerged work won't show as ready, so the run stops naturally. Stop when nothing is ready or the cap is reached.

@@ -1,0 +1,3 @@
+# Append to the web repo's .gitignore (T-00-web does this).
+# Generated from contracts/openapi.yaml by `npm run gen:api` (predev/pretypecheck/pretest/prebuild).
+src/api/schema.d.ts

@@ -57,7 +57,7 @@ Precondition: architecture is approved (`OPERATIONS.md` exists). The user has ru
    - `ops/bootstrap-github.sh`:
      - creates the `dev` and `prod` environments in both code repos, with `prod` requiring the human as reviewer (`gh api -X PUT repos/<r>/environments/prod ...`)
      - sets **environment-level variables** (separate values for `dev` and `prod`) with `gh variable set --env <env>`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RG`, app names
-     - adds **branch protection** on `main` (PR + 1 review + required CI checks)
+     - adds **branch protection** on `main` (PR + 1 review + required CI checks) with **`strict: false`** ("require branches to be up to date" off), so PRs that are only behind `main` never need a rebase. If the repo's plan supports it, offer a **merge queue** instead (rulesets); never turn on strict mode
      - stores no secrets, except the Static Web Apps deployment token if the SWA setup needs one (fetched and piped straight into `gh secret set`, never displayed)
 3. Walk the user through the scripts section by section. Offer to run them **one command at a time** via the permission prompt, or let the user run them. Record the resulting non-secret IDs in `ops/README.md`.
 4. Finish with a checklist of what now exists, plus the next step: run the walking-skeleton tasks (`/factory:build api#1`, `/factory:build web#1`).

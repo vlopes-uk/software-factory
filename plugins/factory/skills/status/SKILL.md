@@ -2,6 +2,7 @@
 name: status
 description: Show the factory's phase gates, what is approved, changed or stale, and the next step.
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue list *) Bash(gh pr list *)
 ---
 
