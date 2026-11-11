@@ -386,6 +386,31 @@ def test_hook_azure_guardrails():
     assert ok("gh release create v1.0.0 --repo me/booking-api --notes-file notes.md") == 0
 
 
+def test_hook_prod_approval_is_human_only():
+    run_ = "repos/o/api/actions/runs/42/pending_deployments"
+    assert hook({"tool_name": "Bash", "tool_input": {"command": f"gh api -X POST {run_} -F environment_ids[]=7 -f state=approved -f comment=ok"}}) == 2
+    assert hook({"tool_name": "Bash", "tool_input": {"command": f"gh api --method POST {run_} --input body.json"}}) == 2
+    assert hook({"tool_name": "Bash", "tool_input": {"command": f"gh api {run_} -f state=approved"}}) == 2
+    assert hook({"tool_name": "Bash", "tool_input": {"command": f"gh api {run_}"}}) == 0              # reading is fine
+    assert hook({"tool_name": "Bash", "tool_input": {"command": "gh release create v1.4.0 --repo o/api --target main --notes-file n.md"}}) == 0
+    assert hook({"tool_name": "Bash", "tool_input": {"command": "gh run watch 42 --repo o/api --interval 30 --exit-status"}}) == 0
+    assert hook({"tool_name": "Bash", "tool_input": {"command": "gh workflow run ci.yml -f env=prod"}}) == 2
+
+
+def test_ci_templates_are_valid_and_verify_versions():
+    try:
+        import yaml
+    except ImportError:
+        return
+    for name, prod_job in (("api-ci.yml", "deploy-prod"), ("web-ci.yml", "deploy-prod")):
+        text = (PLUGIN / "templates" / "ci" / name).read_text(encoding="utf-8")
+        wf = yaml.safe_load(text)
+        steps = " ".join(str(st) for st in wf["jobs"][prod_job]["steps"])
+        assert "github.event.release.tag_name" in steps and "EXPECTED" in steps, name
+    web = yaml.safe_load((PLUGIN / "templates/ci/web-ci.yml").read_text(encoding="utf-8"))
+    assert "@smoke" in str(web["jobs"]["deploy-prod"]["steps"]) and "@smoke" in str(web["jobs"]["smoke-dev"]["steps"])
+
+
 def test_windows_python_launcher_and_encoding():
     import os, shutil, stat
     py_launcher = PLUGIN / "scripts" / "py"
@@ -836,6 +861,8 @@ def test_hook_exploration_and_spike_guards():
 if __name__ == "__main__":
     test_spec_pack_extracts_only_referenced_specs()
     test_bug_priority_ids_and_story_reopen()
+    test_hook_prod_approval_is_human_only()
+    test_ci_templates_are_valid_and_verify_versions()
     test_exploration_flow()
     test_hook_exploration_and_spike_guards()
     test_autonomy_settings_and_protection()

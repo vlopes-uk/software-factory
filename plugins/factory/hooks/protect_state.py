@@ -12,7 +12,9 @@ Blocks (exit 2, reason on stderr):
   3. `gh pr create` while neither main nor any open change request has build open.
   4. agents changing build autonomy (.factory/config.json "autonomy", `gate autonomy set|preset`)
   5. destructive Azure commands (delete/purge, Complete-mode deployments) and direct
-     production deploys (they must go through a GitHub release + prod environment approval).
+     production deploys (they must go through a GitHub release + prod environment approval),
+     including approving a pending deployment (`gh api .../pending_deployments` writes):
+     the prod approval is the human's, in GitHub.
   6. explorations (docs/factory/explorations/EXP-NNN-*): writes into unregistered or closed
      (promoted/rejected) explorations, PoC docs before the approach is approved, DECISION.md,
      and the model running `gate explore reject|pre` (rejecting is the human's call).
@@ -122,6 +124,10 @@ if tool == "Bash":
     if re.search(r"\bgh\s+workflow\s+run\b.*\bprod\b", cmd) or (re.search(r"\baz\s+deployment\b.*\benv=prod\b", cmd) and "what-if" not in cmd):
         block("Blocked: production changes go through `gh release create` and the GitHub `prod` "
               "environment approval, never directly from this session.")
+    if re.search(r"pending_deployments", cmd) and re.search(
+            r"(-X|--method)\s*['\"]?(POST|PUT|PATCH)|\s-[fF]\s|--(raw-)?field\b|--input\b", cmd):
+        block("Blocked: approving a deployment is the human's job. Give them the run URL; they approve "
+              "the `prod` environment in GitHub (Review deployments).")
     if re.search(r"\bgate(?:\.py)?[\"']?\s+approve\b", cmd):
         block("Blocked: phase approval is a human gate. "
               "Ask the user to run /factory:approve ... themselves.")

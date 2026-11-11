@@ -39,7 +39,7 @@ Every factory role reads this file. These are the **fixed** choices. Only the de
 - Persistence is **EF Core** with code-first migrations; the provider is decided per project. Migrations are committed. Never use `EnsureCreated` outside tests. On a migration conflict (the model snapshot), take main's migrations and snapshot, delete your own migration, and re-run `dotnet ef migrations add`; never hand-merge the snapshot.
 - Configuration is `IOptions<T>` bound from appsettings or the environment. Secrets live in **Azure Key Vault** and are read through managed identity. Locally they come from `dotnet user-secrets`. Never commit secrets.
 - Logging uses `ILogger<T>` with structured logs, exported to Application Insights through OpenTelemetry.
-- Health checks are at `/health/live` and `/health/ready`.
+- Health checks are at `/health/live` and `/health/ready`. `GET /health/version` returns `{ "version": "<v>" }` from the assembly's `InformationalVersion`, which CI stamps (the commit sha on dev, the release tag on prod). Deploy smoke checks and `/factory:devops release` use it to confirm what is running. None of the three is in `openapi.yaml`.
 - **Tests: xUnit + Moq**, using xUnit `Assert` (add `Shouldly` only if an ADR says so; avoid FluentAssertions v8+, which has a commercial licence):
   - unit tests: one test class per class under test; **mocks are created in the test class constructor** and stored in readonly fields; naming `Method_Scenario_ExpectedResult`; Arrange/Act/Assert
   - integration tests: `WebApplicationFactory<Program>` plus Testcontainers for the real database engine; no in-memory provider for relational behaviour
@@ -63,6 +63,8 @@ Every factory role reads this file. These are the **fixed** choices. Only the de
   e2e/            Playwright specs
   ```
 - **Tests:** Vitest with React Testing Library and `@testing-library/user-event` for components; MSW for network; **Playwright** for end-to-end, including an `@axe-core/playwright` accessibility check per screen.
+- **Smoke specs:** `e2e/smoke.spec.ts`, with tests tagged `@smoke`, runs against any deployed URL. `playwright.config.ts` uses `process.env.BASE_URL` when it is set, and starts the preview server with MSW only when it isn't. Smoke tests are **read-only**: they load the key screens, check there are no console errors, and wait for a successful real API response, but never submit forms or create data. CI runs them after every dev and prod deploy.
+- **Version:** CI writes `dist/version.json` (`{ "version": "<sha or tag>" }`) after the build, served at `/version.json`.
 - Commands (agents use the quiet forms): `npm ci --no-audit --no-fund --loglevel=error`, `npm run lint -- --quiet` (ESLint), `npm run typecheck` (`tsc --noEmit`), `npm test -- --run --reporter=dot`, `npm run build --silent`, `npx playwright test --reporter=line`.
 
 ## Azure and delivery
@@ -71,7 +73,7 @@ Every factory role reads this file. These are the **fixed** choices. Only the de
 - **API:** Azure App Service (Linux) or Azure Container Apps, chosen in an ADR. The default is App Service for a single API and Container Apps when there are multiple services or background workers.
 - **IaC: Bicep** in each code repo's `infra/`. Environments are `dev` and `prod`, with `staging` optional.
 - **CI/CD: GitHub Actions.** Azure login uses **OIDC federated credentials** (`azure/login`), with no stored secrets. The CI templates are `${CLAUDE_PLUGIN_ROOT}/templates/ci/`.
-- Production deploys: publishing a GitHub release triggers each repo's `deploy-prod` job, which waits for the human's approval on the `prod` environment (`/factory:devops release`). The operations design lives in `OPERATIONS.md`, next to ARCHITECTURE.md.
+- Production deploys: `/factory:devops release` publishes **one product version** (`vX.Y.Z`, the same in both repos), api first. Each release triggers that repo's `deploy-prod` job, which waits for the human's approval on the GitHub `prod` environment, deploys, and then runs its smoke check in the same job. The web release starts only after the API is verified in prod. A repo with no changes since the last release is tagged but not redeployed. Environment variables `API_URL` and `WEB_URL` (per environment) point the smoke checks at the right URLs. The operations design lives in `OPERATIONS.md`, next to ARCHITECTURE.md.
 - Required PR checks: build, format or lint, typecheck, tests, and the contract test (api). Branch protection on `main` requires PRs, 1 review and these checks, with **"require branches to be up to date" off** (or a merge queue, where available), so a PR that is merely behind `main` never needs a rebase.
 - **Conflict-free repo hygiene:** a code-repo `.gitattributes` with `CODEMAP.md merge=union` (rows are one per feature, alphabetical), `package-lock.json` and `*ModelSnapshot.cs` marked `-diff` for review, and `src/api/schema.d.ts` in `.gitignore`.
 - Observability: Application Insights for both; the SPA uses the JS SDK and the connection string from config.

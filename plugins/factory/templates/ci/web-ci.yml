@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
   release:
-    types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval)
+    types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval) + smoke checks
 permissions:
   contents: read
   pull-requests: write   # SWA preview URL comment
@@ -27,6 +27,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test -- --run --coverage
       - run: npm run build
+      - run: echo "{\"version\":\"${{ github.sha }}\"}" > dist/version.json   # served at /version.json; checked after deploys
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test         # runs against the vite preview server with MSW
       - run: npm audit --omit=dev --audit-level=high
@@ -47,6 +48,29 @@ jobs:
           action: upload
           app_location: dist
           skip_app_build: true
+  smoke-dev:                 # read-only @smoke specs against dev after each deploy from main
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: lts/*, cache: npm }
+      - run: npm ci
+      - name: Wait for the new version
+        env:
+          WEB_URL: ${{ vars.WEB_URL }}
+          EXPECTED: ${{ github.sha }}
+        run: |
+          for i in $(seq 1 30); do
+            v=$(curl -fsS "$WEB_URL/version.json" | jq -r .version) && [ "$v" = "$EXPECTED" ] && break
+            sleep 10
+          done
+          [ "$v" = "$EXPECTED" ] || { echo "::error::$WEB_URL serves version '$v', expected '$EXPECTED'"; exit 1; }
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --grep @smoke --reporter=line
+        env: { BASE_URL: "${{ vars.WEB_URL }}" }
   close-preview:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
@@ -61,13 +85,29 @@ jobs:
     environment: prod        # required reviewer = the human
     steps:
       - uses: actions/checkout@v4
-        with: { ref: ${{ github.event.release.tag_name }} }
+        with: { ref: "${{ github.event.release.tag_name }}" }
       - uses: actions/setup-node@v4
         with: { node-version: lts/*, cache: npm }
       - run: npm ci && npm run build
+      - run: echo "{\"version\":\"${{ github.event.release.tag_name }}\"}" > dist/version.json
       - uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN_PROD }}
           action: upload
           app_location: dist
           skip_app_build: true
+      # Smoke checks run in this job so they can read the prod environment's variables without a
+      # second approval. @smoke specs are read-only: they never submit forms or create data.
+      - name: Wait for the new version
+        env:
+          WEB_URL: ${{ vars.WEB_URL }}
+          EXPECTED: ${{ github.event.release.tag_name }}
+        run: |
+          for i in $(seq 1 30); do
+            v=$(curl -fsS "$WEB_URL/version.json" | jq -r .version) && [ "$v" = "$EXPECTED" ] && break
+            sleep 10
+          done
+          [ "$v" = "$EXPECTED" ] || { echo "::error::$WEB_URL serves version '$v', expected '$EXPECTED'"; exit 1; }
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --grep @smoke --reporter=line
+        env: { BASE_URL: "${{ vars.WEB_URL }}" }

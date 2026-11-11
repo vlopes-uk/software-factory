@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
   release:
-    types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval)
+    types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval) + smoke check
 permissions:
   contents: read
   id-token: write        # OIDC to Azure (deploy job)
@@ -39,17 +39,30 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: az deployment group create -g ${{ vars.AZURE_RG }} -f infra/main.bicep -p env=dev
-      - run: dotnet publish src/*.Api -c Release -o publish
+      # The version is stamped into the assembly and served by GET /health/version (smoke check below).
+      - run: dotnet publish src/*.Api -c Release -o publish -p:InformationalVersion=${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false
       # Replace with the deploy step for the ADR-chosen host:
       # App Service:     azure/webapps-deploy@v3 (app-name: ${{ vars.API_APP_NAME }}, package: publish)
       # Container Apps:  azure/container-apps-deploy-action@v2
+      - name: Smoke check (read-only)
+        env:
+          API_URL: ${{ vars.API_URL }}
+          EXPECTED: ${{ github.sha }}
+        run: |
+          for i in $(seq 1 30); do
+            v=$(curl -fsS "$API_URL/health/version" | jq -r .version) && [ "$v" = "$EXPECTED" ] && break
+            sleep 10
+          done
+          [ "$v" = "$EXPECTED" ] || { echo "::error::$API_URL reports version '$v', expected '$EXPECTED'"; exit 1; }
+          curl -fsS "$API_URL/health/ready" > /dev/null || { echo "::error::/health/ready failed"; exit 1; }
+          echo "SMOKE OK: api $EXPECTED at $API_URL"
   deploy-prod:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: prod        # required reviewer = the human; configured by /factory:devops setup
     steps:
       - uses: actions/checkout@v4
-        with: { ref: ${{ github.event.release.tag_name }} }
+        with: { ref: "${{ github.event.release.tag_name }}" }
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -59,5 +72,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: az deployment group create -g ${{ vars.AZURE_RG }} -f infra/main.bicep -p env=prod
-      - run: dotnet publish src/*.Api -c Release -o publish
+      - run: dotnet publish src/*.Api -c Release -o publish -p:InformationalVersion=${{ github.event.release.tag_name }} -p:IncludeSourceRevisionInInformationalVersion=false
       # same host-specific deploy step as deploy-dev, pointed at the prod app name
+      # The smoke check runs in this job (not a separate one) so it can read the prod environment's
+      # variables without asking for a second approval. /factory:devops release reads its result.
+      - name: Smoke check (read-only)
+        env:
+          API_URL: ${{ vars.API_URL }}
+          EXPECTED: ${{ github.event.release.tag_name }}
+        run: |
+          for i in $(seq 1 30); do
+            v=$(curl -fsS "$API_URL/health/version" | jq -r .version) && [ "$v" = "$EXPECTED" ] && break
+            sleep 10
+          done
+          [ "$v" = "$EXPECTED" ] || { echo "::error::$API_URL reports version '$v', expected '$EXPECTED'"; exit 1; }
+          curl -fsS "$API_URL/health/ready" > /dev/null || { echo "::error::/health/ready failed"; exit 1; }
+          echo "SMOKE OK: api $EXPECTED at $API_URL"

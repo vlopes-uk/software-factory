@@ -155,13 +155,37 @@ One command, no extra gate. `OPERATIONS.md` is approved together with the archit
 | `/factory:devops plan [CR-NNN]` | after `/factory:architect` | `OPERATIONS.md`: environments, Azure resources and naming, Bicep modules, CI/CD, secrets, alerts, backups and rollback, monthly cost estimate |
 | `/factory:devops setup` | once, before the walking skeletons | generates `ops/bootstrap-azure.sh` (RGs, app registration + OIDC federated credentials, RG-scoped role, Key Vault, budget alert) and `ops/bootstrap-github.sh` (dev/prod environments with you as prod reviewer, variables, branch protection), then walks you through them |
 | `/factory:devops preview <dev\|prod>` | before infra changes ship | Bicep `what-if`: create / modify / delete per resource |
-| `/factory:devops release` | to ship | readiness checks, changelog, api-before-web ordering, `gh release create`; each repo's `deploy-prod` job then **waits for your approval** in GitHub |
+| `/factory:devops release` | to ship | the whole release to prod: readiness, one product version, api then web, each verified in prod (see below) |
 | `/factory:devops diagnose [run]` | when CI/CD or Azure fails | reads failed logs (+ App Insights), classifies the failure, offers a fix PR |
 
 Guardrails (hook-enforced):
 - no `az ... delete/purge`, no Complete-mode deployments
 - no direct prod deploys; prod goes only through a GitHub release plus the `prod` environment approval
+- the agent never approves a pending deployment (`pending_deployments` writes are blocked); you approve in GitHub
 - the agent never holds prod credentials, and secrets are never printed
+
+### Releasing to prod
+
+```text
+/factory:devops release
+```
+
+1. **Tooling check.** Both repos must report their version: the api's `GET /health/version` and the web's `/version.json`, both stamped by CI. The web also needs a read-only `@smoke` Playwright spec. If something is missing, the agent offers a `factory/ops-release-checks` PR per repo.
+2. **Readiness.** CI is green on `main`. Dev runs the `main` sha, and its smoke checks passed. There are no `factory:blocked` PRs and no open critical or high bugs. Every EF migration since the last release is marked backward compatible, or you confirm it.
+3. **Plan, then your "go".**
+   - **One product version** (`vX.Y.Z`) for both repos: major for BREAKING contract changes, minor for features, patch for fixes.
+   - A changelog per repo.
+   - A repo with no changes is **tagged only, not redeployed**.
+4. **API first.**
+   - The agent creates the release and posts the run link.
+   - **You approve `deploy-prod` in GitHub.**
+   - The agent follows the run, then verifies prod: the smoke step in the deploy job, `/health/version == vX.Y.Z`, and the error rate in App Insights before vs. after.
+5. **Then web.** It starts only after the API is verified, and goes through the same steps. Its smoke step runs the `@smoke` Playwright specs against prod. They are read-only and never create data.
+6. **Result.** A summary table, plus an entry in `ops/RELEASES.md`.
+
+If any check fails, the release stops before the next repo. The agent proposes a rollback (re-running the previous release's `deploy-prod`), which you approve in GitHub again.
+
+**Existing repos:** add `API_URL` and `WEB_URL` as variables on the `dev` and `prod` environments. Then let the first `/factory:devops release` open the release-checks PRs.
 
 ## When upstream documents change: review mode
 

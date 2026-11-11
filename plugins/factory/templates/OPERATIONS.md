@@ -30,10 +30,11 @@ Region: <region> · Naming: `<type>-<product>-<env>` (for example `app-booking-p
 ## 4. CI/CD
 | Repo | On PR | On push to main | On release published |
 | --- | --- | --- | --- |
-| api | build, format, test, contract test | deploy dev (OIDC) | deploy-prod (waits for approval) |
-| web | lint, typecheck, test, build, e2e; SWA preview | deploy dev | deploy-prod (waits for approval) |
+| api | build, format, test, contract test | deploy dev (OIDC) + smoke (`/health/version`, `/health/ready`) | deploy-prod (waits for approval) + smoke |
+| web | lint, typecheck, test, build, e2e; SWA preview | deploy dev + `@smoke` Playwright | deploy-prod (waits for approval) + `/version.json` + `@smoke` |
 
-Release order when the contract changes: **api first, then web**.
+Releases (`/factory:devops release`): one product version `vX.Y.Z` for both repos. **api first**, verified in prod (smoke, version, error rate), **then web**. A repo with no changes since the last release is tagged but not redeployed. History: `ops/RELEASES.md`.
+Environment variables per environment: `API_URL`, `WEB_URL` (used by the smoke checks), plus the Azure IDs and app names.
 
 ## 5. Identity and secrets
 - GitHub → Azure: OIDC federated credentials per repo and environment; the service principal has Contributor **on its resource group only**.
