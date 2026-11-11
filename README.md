@@ -24,7 +24,7 @@ The Architect's `openapi.yaml` is the binding contract between the two code repo
 | build | `/factory:build next` / `story S-03` / `api#12` | .NET / React dev subagents | Branch + PR in that repo |
 | review | `/factory:qa review api#31` | QA reviewer subagent | Review + `qa:*` label |
 
-Gate commands (human only): `/factory:approve <phase>` / `CR-NNN <phase>` / `merge CR-NNN`, `/factory:autonomy`, `/factory:status`, `/factory:init`. New features: `/factory:change`. Bugs: `/factory:bug`.
+Gate commands (human only): `/factory:approve <phase>` / `CR-NNN <phase>` / `merge CR-NNN`, `/factory:autonomy`, `/factory:status`, `/factory:init`. New features: `/factory:change`. Ideas you're not sure are possible: `/factory:explore`. Bugs: `/factory:bug`.
 
 ## Install
 
@@ -106,7 +106,7 @@ Existing repos: run the "adopt conflict-free layout" task once per code repo (se
 1. **Intake:** at most 4 questions (steps, expected vs actual, environment, evidence). Say "just file it" to skip.
 2. **Triage against the approved specs:**
    - **code bug:** violates an acceptance criterion, the contract, a UI state or an NFR, so it becomes a fix task
-   - **spec gap:** the code does what the spec says, so it suggests `/factory:change new`
+   - **spec gap:** the code does what the spec says, so it suggests `/factory:change new` (or `/factory:explore new` if it's unclear how it could work)
    - **infra:** suggests `/factory:devops diagnose`
 3. **Severity** (critical / high / medium / low) and a duplicate check.
 4. **Draft, then "go":** creates `[BUG-NNN]` in the api or web repo with labels `factory:task`, `bug`, `be`/`fe`, `severity:*`. It links the story and AC it violates, includes the reproduction steps, and requires a **regression test that fails before the fix**.
@@ -176,6 +176,37 @@ When you re-approve a document (for example the PRD after `/factory:po revise ..
 2. The role produces an **impact report** with one row per upstream change: `none` / `update` / `question`, the exact section, operationId, screen or task affected, and the proposed change. The Architect also classifies contract changes as additive or **BREAKING**. Planning never reopens closed tasks; it adds follow-ups instead.
 3. Nothing is edited until you say "go". Edits are targeted, and a `Revision history` line is added. If upstream was only re-approved with no content change, the review says re-approving as-is is safe.
 
+## Not sure it's possible? Explorations
+
+Use an exploration when you have an idea but don't know whether the app can do it, or how. You discuss it with an Explorer agent, it builds a working proof of concept, and you decide. Explorations can start at any time, even during the first cycle. They never block anything and are never blocked by anything.
+
+```text
+/factory:explore new Offline mode for patients   # creates EXP-001 and starts the discussion
+#   the Explorer reads the PRD, architecture, contract and code maps, asks up to 4 questions,
+#   researches options and writes FINDINGS.md: feasibility, 2-4 approaches, a recommendation,
+#   and what a PoC must prove. You pick one; it records "Chosen approach:".
+/factory:approve EXP-001 approach
+/factory:explore EXP-001 poc                     # POC-BRIEF.md, then after your "go" the BE/FE devs
+                                                 # build it in spike mode; POC-REPORT.md + a demo script
+/factory:explore EXP-001 poc <feedback>          # optional iterations
+/factory:approve EXP-001 poc                     # after you ran the demo locally
+/factory:explore promote EXP-001                 # creates CR-NNN, pre-filled from the exploration
+/factory:explore reject EXP-001 <why>            # or: keep the findings on file and stop
+```
+
+| Step | Output (in `docs/factory/explorations/EXP-NNN-<slug>/`) | Gate |
+| --- | --- | --- |
+| Discuss | `FINDINGS.md` | `approve EXP-NNN approach` needs a filled-in `Chosen approach:` |
+| PoC | `POC-BRIEF.md`, `POC-REPORT.md`, code on `spike/EXP-NNN-<slug>` in api/web | writable only after the approach is approved; `approve EXP-NNN poc` |
+| Decide | `DECISION.md` (written by the gate) | `promote` needs both approvals, both still current; `reject` is human-only |
+
+- **Spike mode:** the developer subagents (Sonnet) build the thinnest slice that proves the brief's claims. Tests and QA are optional, and shortcuts and extra packages are allowed but listed. They push the `spike/...` branch (CI doesn't run on it) and leave a local worktree under `.factory-worktrees/<api|web>-EXP-NNN` for you to run the demo from.
+- **Spike code is reference only.** The hook refuses PRs from spike branches, merging or cherry-picking them, and pushing them to `main`. After promotion, the CR's developers rebuild the feature properly, with tests and the contract.
+- **Promoted CRs know their origin.** Every CR role's gate check prints the exploration. The PO drafts from the findings and asks only what's left open, and the Architect records the chosen approach as an ADR.
+- **Drift:** editing `FINDINGS.md` after approval marks the approach `changed`. Re-approving it marks the PoC `stale`. Either blocks promotion until you re-approve.
+- Rejected explorations stay on file with the reason, so the same idea isn't explored again blind. `/factory:status` lists every exploration.
+- If you already know what you want, skip all this and use `/factory:change new`.
+
 ## New features after the cycle started: change requests
 
 ```text
@@ -208,7 +239,9 @@ When you re-approve a document (for example the PRD after `/factory:po revise ..
   - writes into a phase's `docs/factory/0N-*` folder while upstream isn't approved, whether by Write/Edit or by a shell write
   - `gh pr create` while the build phase is closed
   - any edit to the state file
-  - any model-initiated `gate.py approve`
+  - any model-initiated `gate.py approve`, or `gate.py explore reject`
+  - writes into closed or unregistered explorations, and PoC docs before the approach is approved
+  - PRs, merges, cherry-picks or pushes to `main` from `spike/EXP-*` branches
 - If you edit an approved doc, that phase becomes `changed`. Re-approving it marks every downstream phase `stale`. Both states block the phases that depend on them.
 - `/factory:approve` works only for you, because its `!` injection runs outside the tool pipeline and the skill has `disable-model-invocation: true`.
 - For team use, add GitHub branch protection plus a CODEOWNERS entry on `docs/factory/` and `.factory/`, so approvals are also reviewed in PRs.

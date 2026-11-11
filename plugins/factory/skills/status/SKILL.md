@@ -22,6 +22,7 @@ Present the gate output above as-is: the main baseline table, then the change re
 
 - what each `changed` or `stale` phase means for them (an approved doc was edited, or an upstream doc was re-approved, so the work that depends on it is blocked until they re-approve)
 - that change requests are gated independently, so a CR in progress never blocks main builds
+- explorations (`EXP-NNN`), if any: where each one stands (discuss, PoC, ready to promote), and that they never block anything
 - the next steps, from the `Next:` lines. For a `stale` phase that is the role's **review mode** (for example `/factory:architect review`), which shows exactly what changed upstream and what it affects. Recommend it before re-approving.
 
 If the user wants to add a new feature, point them to `/factory:change new <title>`.

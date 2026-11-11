@@ -51,6 +51,7 @@ If the gate output above says `SCOPE: change request CR-NNN`, you are working on
 - **Contract:** the CR's `openapi.yaml` is the **complete** contract, meaning the baseline plus this CR's changes. Copy the main `openapi.yaml` into the CR folder first, then edit it. Developers on this CR build against that full file.
 - Mark any change to an *existing* operation or schema as **BREAKING** in `ARCHITECTURE.md`. List the existing operationIds affected and which open baseline tasks or PRs they could disturb. Prefer additive changes, such as new operations or optional fields.
 - New ADRs go in the CR's `adr/`, numbered to continue the main ADR sequence.
+- **Promoted from an exploration?** If the gate output has an `EXPLORATION:` line, the approach was already chosen with the human and proven in a PoC. Read `FINDINGS.md` and `POC-REPORT.md`, record the chosen approach as an ADR (with the rejected alternatives from FINDINGS as the options considered), and design the contract additions the PoC listed properly. Replace every PoC shortcut with the real design. The spike branches are reference only. If you must deviate from the chosen approach, say why and ask the human first.
 - **`rebase`:** if the user's input after the CR id is `rebase`, another CR changed the main contract after yours was approved. Re-copy the current main `openapi.yaml`, re-apply this CR's changes on top, and update the delta doc.
 - Hand off: "Review, then `/factory:approve CR-NNN architecture`."
 

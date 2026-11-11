@@ -47,6 +47,7 @@ If the gate output above says `SCOPE: change request CR-NNN`, you are working on
 - Your document is a **delta**. Include only what is new or changed, plus explicit references to the baseline sections it touches. Don't copy the whole baseline.
 - The gate names your primary file. Ignore the first word of the user's input, which is the CR id.
 - Use `${CLAUDE_PLUGIN_ROOT}/templates/change/REQUIREMENTS.md`. Interview only about this feature, in at most 2 short rounds.
+- **Promoted from an exploration?** If the gate output has an `EXPLORATION:` line, read that exploration's `FINDINGS.md` (the idea, the clarifications, the chosen approach) and `POC-REPORT.md` (what was proven, the shortcuts) first. Draft the requirements from them, and ask only about what they leave open: often just the acceptance criteria and priorities. Link the exploration in §1 *Why*. Keep the requirements technology-neutral; the chosen approach goes to the Architect.
 - Continue the story numbering from the highest `S-NN` in the main PRD. List changed existing stories under **Modified stories**, with the old and new acceptance criteria.
 - Create issues for the new stories only, with labels `factory:story`, `priority:*` and `cr:CR-NNN`, and the line `Change request: CR-NNN` in each body. For modified stories, add a comment to the existing issue explaining the change.
 - Hand off: "Review `REQUIREMENTS.md`, then `/factory:approve CR-NNN requirements`. Then `/factory:architect CR-NNN` and `/factory:design CR-NNN`."

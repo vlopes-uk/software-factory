@@ -41,7 +41,7 @@ Read the relevant parts of `docs/factory/` (and any open CR folder): the PRD sto
 | Class | Meaning | What you do |
 | --- | --- | --- |
 | **Code bug** | The code contradicts an acceptance criterion, the API contract, a UI-SPEC state, or an NFR | Create a fix task (step 4) |
-| **Spec gap** | The code does what the specs say, but the specs were wrong or silent | Don't create a bug. Recommend `/factory:change new <what should happen>`, quoting the spec line |
+| **Spec gap** | The code does what the specs say, but the specs were wrong or silent | Don't create a bug. Recommend `/factory:change new <what should happen>`, quoting the spec line. If it's unclear whether or how the desired behaviour is achievable, recommend `/factory:explore new <idea>` instead |
 | **Infrastructure / config** | Deploy, environment, secret, scaling or Azure issue | Recommend `/factory:devops diagnose`, or propose an `ops` task |
 
 When unsure between "code bug" and "spec gap", ask the user one question: "Should it behave as the spec says, or as you expected?"

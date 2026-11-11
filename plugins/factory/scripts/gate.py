@@ -12,6 +12,9 @@ Two kinds of scope:
            Each CR phase depends on its own upstream phases AND on the same
            main phase being approved. Gating a CR never blocks main or other CRs.
            A merged CR's docs are folded into main and main is re-baselined.
+  EXP-NNN  an exploration, docs/factory/explorations/EXP-NNN-<slug>/: is an idea possible,
+           and how? Approach + PoC approvals, then promoted into a CR or rejected.
+           Explorations never block, and are never blocked by, main or CRs.
 
 Usage:
   gate.py init
@@ -25,6 +28,10 @@ Usage:
   gate.py approve <phase>                 human-only (the hook blocks the model)
   gate.py approve CR-NNN <phase>          human-only
   gate.py approve merge CR-NNN            human-only: accept CR docs merged into main
+  gate.py approve EXP-NNN <approach|poc>  human-only: approve an exploration step
+  gate.py explore new <idea words...>     start an exploration (discuss -> PoC -> promote/reject)
+  gate.py explore list|show EXP-NNN|check <approach|poc> EXP-NNN|promote EXP-NNN
+  gate.py explore reject EXP-NNN <why>    human-only (via the /factory:explore injection)
   gate.py autonomy [show | preset <manual|assisted|autopilot> | set <key> <value>]
                                           build-phase autonomy (preset/set are human-only)
   gate.py spec <api#N | web#N>            spec pack: only the spec excerpts that task references
@@ -70,6 +77,14 @@ ORDER = list(PHASES)
 DOC_PHASES = [p for p in ORDER if PHASES[p]["dir"]]
 EXIT_BLOCKED = 3
 CR_RE = re.compile(r"^CR-\d{3,}$")
+EXP_RE = re.compile(r"^EXP-\d{3,}$")
+EXP_PHASES: dict[str, dict] = {
+    "approach": {"role": "Explorer (/factory:explore EXP-NNN)", "deps": [],
+                 "files": ["FINDINGS.md"], "primary": "FINDINGS.md"},
+    "poc": {"role": "Explorer + BE/FE devs in spike mode (/factory:explore EXP-NNN poc)", "deps": ["approach"],
+            "files": ["POC-BRIEF.md", "POC-REPORT.md"], "primary": "POC-REPORT.md"},
+}
+EXP_ORDER = list(EXP_PHASES)
 CONTRACT = "openapi.yaml"
 MAIN = None  # scope value for the baseline
 REVIEW_LINES = 400  # max diff lines printed per upstream phase
@@ -96,6 +111,7 @@ STATE = ROOT / ".factory" / "state.json"
 CONFIG = ROOT / ".factory" / "config.json"
 DOCS = ROOT / "docs" / "factory"
 CHANGES = DOCS / "changes"
+EXPLORATIONS = DOCS / "explorations"
 SNAP = ROOT / ".factory" / "snapshots"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------- autonomy (build phase only)
@@ -419,6 +435,332 @@ def phase_for_path(path: str):
     return hit[0] if hit else None
 
 
+# ---------------------------------------------------------------- explorations (EXP-NNN)
+# An exploration answers "is this possible, and how?" before any change request exists:
+#   discuss  -> FINDINGS.md with a chosen approach      (human: approve EXP-NNN approach)
+#   PoC      -> spike/EXP-NNN-* branches, POC-BRIEF.md + POC-REPORT.md
+#                                                       (human: approve EXP-NNN poc)
+#   decide   -> promote into a CR (both approvals needed) or reject (human only)
+# Explorations never block, and are never blocked by, main or change requests.
+
+def norm_exp(raw):
+    if raw and EXP_RE.match(raw.strip().upper()):
+        return raw.strip().upper()
+    return None
+
+
+def exp(state: dict, eid: str) -> dict:
+    e = state.get("explorations", {}).get(eid)
+    if e is None:
+        print(f"GATE: unknown exploration {eid}. Create one with /factory:explore new <idea>.")
+        sys.exit(EXIT_BLOCKED)
+    return e
+
+
+def exp_dir(eid: str, state: dict) -> Path:
+    return EXPLORATIONS / exp(state, eid)["folder"]
+
+
+def exp_files(phase: str, eid: str, state: dict) -> list[Path]:
+    d = exp_dir(eid, state)
+    return [d / n for n in EXP_PHASES[phase]["files"] if (d / n).is_file()]
+
+
+def exp_digest(phase: str, eid: str, state: dict) -> str:
+    h = hashlib.sha256()
+    for f in exp_files(phase, eid, state):
+        h.update(f.name.encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def exp_status(phase: str, eid: str, state: dict) -> str:
+    """not-started | draft | approved | changed | stale"""
+    e = exp(state, eid)
+    rec = e.get("phases", {}).get(phase)
+    if rec is None:
+        return "draft" if (exp_dir(eid, state) / EXP_PHASES[phase]["primary"]).is_file() else "not-started"
+    if rec.get("sha256") != exp_digest(phase, eid, state):
+        return "changed"
+    for d in EXP_PHASES[phase]["deps"]:
+        drec = e.get("phases", {}).get(d)
+        if exp_status(d, eid, state) != "approved" or drec["approved_at"] > rec["approved_at"]:
+            return "stale"
+    return "approved"
+
+
+def exp_blockers(phase: str, eid: str, state: dict) -> list[str]:
+    e = exp(state, eid)
+    if e["status"] != "open":
+        return [f"{eid} is {e['status']}; its documents are frozen"]
+    return [f"{eid} {d} is '{exp_status(d, eid, state)}' (the human approves it with /factory:approve {eid} {d})"
+            for d in EXP_PHASES[phase]["deps"] if exp_status(d, eid, state) != "approved"]
+
+
+CHOSEN_RE = re.compile(r"^\W*Chosen approach\W*:\**[ \t]*(.*)$", re.I | re.M)
+
+
+def chosen_approach(eid: str, state: dict):
+    f = exp_dir(eid, state) / "FINDINGS.md"
+    if not f.is_file():
+        return None
+    m = CHOSEN_RE.search(f.read_text(encoding="utf-8", errors="replace"))
+    if not m:
+        return None
+    v = m.group(1).strip().strip("*").strip()
+    if not v or v.startswith("<") or v.upper() in ("TBD", "-", "NONE", "N/A"):
+        return None
+    return v
+
+
+def path_exploration(path: str, state: dict | None = None):
+    """Map a path to (exploration id, file inside its folder), or None.
+    The id is 'unregistered:<folder>' when the folder isn't a registered exploration."""
+    try:
+        r = Path(path).resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        r = Path(path).as_posix()
+    m = re.match(r"docs/factory/explorations/([^/]+)(?:/(.*))?$", r)
+    if not m:
+        return None
+    state = load() if state is None else state
+    folder, rest = m.group(1), (m.group(2) or "")
+    eid = next((k for k, v in state.get("explorations", {}).items() if v["folder"] == folder), None)
+    return (eid or f"unregistered:{folder}"), rest
+
+
+def exploration_write_blocker(path: str, state: dict):
+    """Reason a write to `path` must be refused, or None. Used by the hook."""
+    hit = path_exploration(path, state)
+    if not hit:
+        return None
+    eid, rest = hit
+    if eid.startswith("unregistered:"):
+        return (f"{eid.split(':', 1)[1]} is not a registered exploration. "
+                "Create explorations with /factory:explore new <idea>.")
+    e = state["explorations"][eid]
+    if e["status"] != "open":
+        return f"{eid} is {e['status']}; its documents are frozen."
+    if rest == "DECISION.md":
+        return "DECISION.md is written only by gate.py when an exploration is promoted or rejected."
+    for phase, spec in EXP_PHASES.items():
+        if rest in spec["files"]:
+            bl = exp_blockers(phase, eid, state)
+            if bl:
+                return f"cannot write {eid} {phase} artifacts yet: " + "; ".join(bl)
+    return None
+
+
+def exp_next(eid: str, state: dict) -> str:
+    e = exp(state, eid)
+    if e["status"] != "open":
+        return ""
+    a, p = exp_status("approach", eid, state), exp_status("poc", eid, state)
+    if a in ("not-started", "draft"):
+        return (f"{eid}: discuss with /factory:explore {eid}, record the chosen approach in FINDINGS.md, "
+                f"then /factory:approve {eid} approach")
+    if a == "changed":
+        return f"{eid}: FINDINGS.md was edited after approval: review it, then /factory:approve {eid} approach"
+    if p in ("not-started", "draft"):
+        return (f"{eid}: build the PoC with /factory:explore {eid} poc, try the demo, then "
+                f"/factory:approve {eid} poc (or /factory:explore reject {eid} <why>)")
+    if p in ("changed", "stale"):
+        return f"{eid}: the PoC docs are {p}: review POC-REPORT.md, then /factory:approve {eid} poc"
+    return (f"{eid}: approach and PoC approved: /factory:explore promote {eid} "
+            f"(or /factory:explore reject {eid} <why>)")
+
+
+def slugify(title: str, default: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40].strip("-") or default
+
+
+def write_decision(eid: str, state: dict, line: str) -> None:
+    f = exp_dir(eid, state) / "DECISION.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    text = f.read_text(encoding="utf-8") if f.exists() else f"# {eid} decision\n\n"
+    f.write_text(text + f"- {line}\n", encoding="utf-8")
+
+
+def explore_list(state: dict) -> None:
+    exps = state.get("explorations", {})
+    if not exps:
+        print("No explorations yet. Start one: /factory:explore new <idea>")
+    for eid, e in sorted(exps.items()):
+        extra = {"promoted": f" -> {e.get('promoted_to', '')}",
+                 "rejected": f": {e.get('rejected_reason', '')}"}.get(e["status"], "")
+        cells = ", ".join(f"{p}={exp_status(p, eid, state)}" for p in EXP_ORDER)
+        print(f"{eid}  [{e['status']}{extra}]  {e['title']}  ({cells})  "
+              f"->  docs/factory/explorations/{e['folder']}/")
+
+
+def explore_show(state: dict, eid: str) -> None:
+    e = exp(state, eid)
+    folder = f"docs/factory/explorations/{e['folder']}"
+    print(f"EXPLORATION {eid} '{e['title']}' [{e['status']}]  {folder}/")
+    for p in EXP_ORDER:
+        rec = e.get("phases", {}).get(p, {})
+        print(f"  {p.ljust(9)} {exp_status(p, eid, state).ljust(11)} approved at {rec.get('approved_at', '-')}")
+    print(f"  chosen approach: {chosen_approach(eid, state) or '(not chosen yet)'}")
+    if e["status"] == "rejected":
+        print(f"REJECTED {e.get('rejected_at', '')}: {e.get('rejected_reason', '')}. Its documents are frozen.")
+        return
+    if e["status"] == "promoted":
+        print(f"PROMOTED to {e.get('promoted_to')} on {e.get('promoted_at', '')}. Its documents are frozen; "
+              f"continue with /factory:po {e.get('promoted_to')}.")
+        return
+    bl = exp_blockers("poc", eid, state)
+    print("POC GATE OPEN: the PoC may be built (spike branches only)." if not bl
+          else "POC GATE BLOCKED: " + "; ".join(bl))
+    print(f"Write ONLY in: {folder}/ (FINDINGS.md now; POC-BRIEF.md and POC-REPORT.md once the approach "
+          "is approved). Spike code goes only on spike/" + eid + "-* branches.")
+    print("Next: " + exp_next(eid, state))
+
+
+def explore_new(state: dict, title: str) -> None:
+    exps = state.setdefault("explorations", {})
+    n = 1 + max([int(k.split("-")[1]) for k in exps] or [0])
+    eid = f"EXP-{n:03d}"
+    folder = f"{eid}-{slugify(title, 'idea')}"
+    exps[eid] = {"title": title, "folder": folder, "status": "open", "created_at": now(), "phases": {}}
+    save(state)
+    (EXPLORATIONS / folder).mkdir(parents=True, exist_ok=True)
+    print(f"CREATED {eid}: '{title}' at docs/factory/explorations/{folder}/")
+    print(f"Next: /factory:explore {eid} (discuss the options; the Explorer writes FINDINGS.md)")
+
+
+def explore_check(state: dict, phase: str, eid: str, soft: bool) -> None:
+    bl = exp_blockers(phase, eid, state)
+    if bl:
+        print(f"GATE BLOCKED: {eid} '{phase}' cannot start yet.")
+        for b in bl:
+            print(f"  - {b}")
+        print("STOP.")
+        if not soft:
+            sys.exit(EXIT_BLOCKED)
+        return
+    print(f"GATE OPEN: {eid} '{phase}' may proceed (current status: {exp_status(phase, eid, state)}).")
+
+
+def explore_promote(state: dict, eid: str) -> None:
+    e = exp(state, eid)
+    if e["status"] != "open":
+        print(f"GATE: {eid} is already {e['status']}.")
+        sys.exit(EXIT_BLOCKED)
+    problems = [f"{eid} {p} is '{exp_status(p, eid, state)}'" for p in EXP_ORDER
+                if exp_status(p, eid, state) != "approved"]
+    if problems:
+        print(f"GATE: cannot promote {eid}; the human must approve both the approach and the PoC first:")
+        for pr in problems:
+            print(f"  - {pr}")
+        sys.exit(EXIT_BLOCKED)
+    cid, folder = new_change(state, e["title"])
+    state["changes"][cid]["exploration"] = eid
+    stamp = now()
+    e.update(status="promoted", promoted_to=cid, promoted_at=stamp)
+    write_decision(eid, state, f"Promoted to {cid} on {stamp}. Chosen approach: {chosen_approach(eid, state)}")
+    save(state)
+    make_dirs(CHANGES / folder)
+    print(f"PROMOTED {eid} -> {cid}: '{e['title']}' at docs/factory/changes/{folder}/")
+    print(f"The CR's roles read docs/factory/explorations/{e['folder']}/ (FINDINGS.md, POC-REPORT.md) first.")
+    bl = blockers("requirements", cid, state)
+    if bl:
+        print("Note: this CR can start once the baseline is approved: " + "; ".join(bl))
+    else:
+        print(f"Next: /factory:po {cid}")
+
+
+def explore_reject(state: dict, words: list[str]) -> None:
+    eid = norm_exp(words[0]) if words else None
+    reason = " ".join(words[1:]).strip()
+    if not eid or not reason:
+        print("Usage: /factory:explore reject EXP-NNN <why>  (the reason is kept on file)")
+        sys.exit(2)
+    e = exp(state, eid)
+    if e["status"] != "open":
+        print(f"GATE: {eid} is already {e['status']}.")
+        sys.exit(EXIT_BLOCKED)
+    stamp = now()
+    e.update(status="rejected", rejected_at=stamp, rejected_reason=reason)
+    write_decision(eid, state, f"Rejected on {stamp}: {reason}")
+    save(state)
+    print(f"REJECTED: {eid} '{e['title']}': {reason}")
+    print(f"Its findings stay on file in docs/factory/explorations/{e['folder']}/ (DECISION.md records why).")
+
+
+def cmd_exp_approve(phase: str, eid: str) -> None:
+    state = load()
+    require_init(state)
+    e = exp(state, eid)
+    if e["status"] != "open":
+        print(f"GATE: {eid} is {e['status']}; its documents are frozen.")
+        sys.exit(EXIT_BLOCKED)
+    bl = exp_blockers(phase, eid, state)
+    if bl:
+        print(f"GATE: cannot approve {eid} '{phase}' yet:")
+        for b in bl:
+            print(f"  - {b}")
+        sys.exit(EXIT_BLOCKED)
+    d = exp_dir(eid, state)
+    missing = [n for n in EXP_PHASES[phase]["files"] if not (d / n).is_file()]
+    if missing:
+        print(f"GATE: cannot approve {eid} '{phase}': missing " + ", ".join(missing)
+              + f" in docs/factory/explorations/{e['folder']}/.")
+        sys.exit(EXIT_BLOCKED)
+    if phase == "approach" and not chosen_approach(eid, state):
+        print(f"GATE: cannot approve {eid} 'approach': FINDINGS.md has no 'Chosen approach:' yet. "
+              f"Pick one with the Explorer (/factory:explore {eid}) first.")
+        sys.exit(EXIT_BLOCKED)
+    files = exp_files(phase, eid, state)
+    e.setdefault("phases", {})[phase] = {
+        "approved_at": now(),
+        "approved_by": os.environ.get("USER") or os.environ.get("USERNAME") or "unknown",
+        "sha256": exp_digest(phase, eid, state),
+        "files": [rel(f) for f in files],
+    }
+    save(state)
+    print(f"APPROVED: {eid} '{phase}' ({len(files)} files hashed).")
+    if phase == "approach":
+        print(f"  Chosen approach: {chosen_approach(eid, state)}")
+        if exp_status("poc", eid, state) == "stale":
+            print(f"Now stale: {eid} poc (re-check the PoC against the new approach, then re-approve it).")
+    nxt = exp_next(eid, state)
+    if nxt:
+        print(f"Next: {nxt}")
+
+
+def cmd_explore(args: list[str]) -> None:
+    state = load()
+    require_init(state)
+    state.setdefault("explorations", {})
+    sub = args[0].lower() if args else "list"
+    if sub == "pre":
+        # `!` injection of /factory:explore: runs before the model, so it is the human's path to
+        # `reject`. The hook refuses `explore pre` and `explore reject` from the model.
+        words = " ".join(args[1:]).split()
+        ids = [norm_exp(w) for w in words if norm_exp(w)]
+        if words and words[0].lower() == "reject":
+            explore_reject(state, words[1:])
+        elif ids:
+            explore_show(state, ids[0])
+        else:
+            explore_list(state)
+    elif sub == "list":
+        explore_list(state)
+    elif sub == "new" and len(args) > 1:
+        explore_new(state, " ".join(args[1:]).strip())
+    elif sub == "show" and len(args) > 1 and norm_exp(args[1]):
+        explore_show(state, norm_exp(args[1]))
+    elif sub == "check" and len(args) > 2 and args[1] in EXP_PHASES and norm_exp(args[2]):
+        explore_check(state, args[1], norm_exp(args[2]), "--soft" in args)
+    elif sub == "promote" and len(args) > 1 and norm_exp(args[1]):
+        explore_promote(state, norm_exp(args[1]))
+    elif sub == "reject":
+        explore_reject(state, args[1:])
+    else:
+        print("Usage: gate.py explore new <idea words...> | list | show EXP-NNN | "
+              "check <approach|poc> EXP-NNN [--soft] | promote EXP-NNN | reject EXP-NNN <why> (human)")
+        sys.exit(2)
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_config() -> None:
@@ -455,6 +797,17 @@ def make_dirs(base: Path) -> None:
             (d / ".gitkeep").touch()
 
 
+def new_change(state: dict, title: str) -> tuple[str, str]:
+    """Register a new CR in `state` (caller saves); return (id, folder)."""
+    changes = state.setdefault("changes", {})
+    n = 1 + max([int(k.split("-")[1]) for k in changes] or [0])
+    cid = f"CR-{n:03d}"
+    folder = f"{cid}-{slugify(title, 'change')}"
+    changes[cid] = {"title": title, "folder": folder, "status": "open",
+                    "created_at": now(), "phases": {}}
+    return cid, folder
+
+
 def cmd_change(args: list[str]) -> None:
     state = load()
     require_init(state)
@@ -469,12 +822,7 @@ def cmd_change(args: list[str]) -> None:
         print("Usage: gate.py change new <title words...> | gate.py change list")
         sys.exit(2)
     title = " ".join(args[1:]).strip()
-    n = 1 + max([int(k.split("-")[1]) for k in changes] or [0])
-    cid = f"CR-{n:03d}"
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40].strip("-") or "change"
-    folder = f"{cid}-{slug}"
-    changes[cid] = {"title": title, "folder": folder, "status": "open",
-                    "created_at": now(), "phases": {}}
+    cid, folder = new_change(state, title)
     save(state)
     make_dirs(CHANGES / folder)
     print(f"CREATED {cid}: '{title}' at docs/factory/changes/{folder}/")
@@ -507,6 +855,9 @@ def cmd_status(brief: bool) -> None:
         line = "Factory status: main: " + ", ".join(f"{p}={s}" for p, s, _ in main_rows)
         for cid in open_crs:
             line += f" | {cid}: " + ", ".join(f"{p}={s}" for p, s, _ in status_rows(cid, state, memo))
+        for eid, e in sorted(state.get("explorations", {}).items()):
+            if e["status"] == "open":
+                line += f" | {eid}: " + ", ".join(f"{p}={exp_status(p, eid, state)}" for p in EXP_ORDER)
         print(line)
         return
     w = max(len(p) for p in ORDER)
@@ -524,7 +875,18 @@ def cmd_status(brief: bool) -> None:
                 print(f"  {cid}  merged {c.get('merged_at', '')}  {c['title']}")
                 continue
             cells = ", ".join(f"{short[p]}={s}" for p, s, _ in status_rows(cid, state, memo))
-            print(f"  {cid}  {c['title']}\n      {cells}")
+            src = f"  (from {c['exploration']})" if c.get("exploration") else ""
+            print(f"  {cid}  {c['title']}{src}\n      {cells}")
+    if state.get("explorations"):
+        print("\nEXPLORATIONS (never block main or CRs)")
+        for eid, e in sorted(state["explorations"].items()):
+            if e["status"] == "promoted":
+                print(f"  {eid}  promoted -> {e.get('promoted_to')}  {e['title']}")
+            elif e["status"] == "rejected":
+                print(f"  {eid}  rejected {e.get('rejected_at', '')}  {e['title']}: {e.get('rejected_reason', '')}")
+            else:
+                cells = ", ".join(f"{p}={exp_status(p, eid, state)}" for p in EXP_ORDER)
+                print(f"  {eid}  {e['title']}\n      {cells}")
     if CONFIG.exists():
         try:
             eff, _ = effective_autonomy(json.loads(CONFIG.read_text(encoding="utf-8")))
@@ -577,6 +939,8 @@ def next_steps(state: dict, memo: dict) -> list[str]:
     for cid, c in sorted(state.get("changes", {}).items()):
         if c["status"] == "open":
             out.append(next_step_for(cid, state, memo))
+    for eid in sorted(state.get("explorations", {})):
+        out.append(exp_next(eid, state))
     return [s for s in out if s]
 
 
@@ -621,6 +985,12 @@ def cmd_check(phase: str, scope, soft: bool) -> None:
                   f"(primary file: {PHASES[phase]['cr_primary']})")
         print(f"Baseline (read-only for this CR): docs/factory/0N-*/  "
               f"Other CR docs: docs/factory/changes/{c['folder']}/")
+        if c.get("exploration") and c["exploration"] in state.get("explorations", {}):
+            e = state["explorations"][c["exploration"]]
+            print(f"EXPLORATION: {scope} was promoted from {c['exploration']}. Read "
+                  f"docs/factory/explorations/{e['folder']}/FINDINGS.md and POC-REPORT.md first. The chosen "
+                  f"approach was decided with the human; build on it (raise a question if you must deviate). "
+                  f"Its spike branches are reference code only: never merge or copy them wholesale.")
     elif PHASES[phase]["dir"]:
         print(f"SCOPE: main baseline. Write ONLY in: {rel(phase_dir(phase, MAIN, state))}/")
     if s == "approved":
@@ -890,6 +1260,8 @@ def main(argv: list[str]) -> None:
         cmd_status("--brief" in flags)
     elif cmd == "change":
         cmd_change(pos)
+    elif cmd == "explore":
+        cmd_explore([a for a in argv[1:] if a.strip()])
     elif cmd == "tasks":  # task readiness for /factory:build (reads GitHub via gh)
         import tasks
         tasks.cmd(argv[1:])
@@ -909,12 +1281,15 @@ def main(argv: list[str]) -> None:
     elif cmd == "approve":
         if len(pos) == 2 and pos[0].lower() == "merge":
             cmd_merge(norm_scope(pos[1]) or sys.exit(f"Usage: gate.py approve merge CR-NNN"))
+        elif len(pos) == 2 and norm_exp(pos[0]) and pos[1] in EXP_PHASES:
+            cmd_exp_approve(pos[1], norm_exp(pos[0]))
         elif len(pos) == 2 and norm_scope(pos[0]) and pos[1] in PHASES:
             cmd_approve(pos[1], norm_scope(pos[0]))
         elif len(pos) == 1 and pos[0] in PHASES:
             cmd_approve(pos[0], MAIN)
         else:
-            print("Usage: gate.py approve <phase> | approve CR-NNN <phase> | approve merge CR-NNN")
+            print("Usage: gate.py approve <phase> | approve CR-NNN <phase> | approve merge CR-NNN | "
+                  "approve EXP-NNN <approach|poc>")
             sys.exit(2)
     else:
         print(__doc__)

@@ -24,6 +24,7 @@ A **change request (CR)** is a new feature, or a change to an existing one, that
 
 ## `new <title>`
 
+0. If the user doesn't yet know whether the feature is possible, or how to do it (new technology, an unknown integration, a big architectural question), suggest `/factory:explore new <idea>` first: discussion, then a working proof of concept, then promotion into a pre-filled CR. If they want to go ahead anyway, continue.
 1. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" change new <title words>` and show the output.
 2. If GitHub is configured, create the label in all three repos: `gh label create "cr:CR-NNN" --repo <repo> --color 7057ff --description "<title>" --force`.
 3. Tell the user the next step: `/factory:po CR-NNN`. The PO interviews them about the feature.

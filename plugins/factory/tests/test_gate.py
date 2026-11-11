@@ -707,9 +707,137 @@ def test_spec_pack_extracts_only_referenced_specs():
         assert "SPEC PACK UNAVAILABLE" in bad
 
 
+def exp_doc(repo, folder, name, text):
+    write(repo, f"docs/factory/explorations/{folder}/{name}", text)
+
+
+def test_exploration_flow():
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        # explorations run any time: nothing in main is approved yet
+        code, out = run(repo, "explore", "new", "Offline mode!")
+        assert code == 0 and "EXP-001" in out, out
+        f = "EXP-001-offline-mode"
+        assert (Path(repo) / "docs/factory/explorations" / f).is_dir()
+        assert run(repo, "explore", "check", "approach", "EXP-001")[0] == 0
+        assert run(repo, "explore", "check", "poc", "EXP-001")[0] == 3
+        assert run(repo, "approve", "EXP-001", "approach")[0] == 3            # FINDINGS.md missing
+        exp_doc(repo, f, "FINDINGS.md", "# F\n**Chosen approach:** <A, B or C, filled in after the human picks>\n")
+        assert status(repo)["EXP-001: approach"] == "draft"
+        code, out = run(repo, "approve", "EXP-001", "approach")
+        assert code == 3 and "Chosen approach" in out, out                     # placeholder only
+        exp_doc(repo, f, "FINDINGS.md", "# F\n**Chosen approach:** B, service worker cache\n")
+        code, out = run(repo, "approve", "EXP-001", "approach")
+        assert code == 0 and "service worker" in out, out
+        assert run(repo, "explore", "check", "poc", "EXP-001")[0] == 0
+        assert run(repo, "explore", "promote", "EXP-001")[0] == 3              # PoC not approved
+        exp_doc(repo, f, "POC-REPORT.md", "works")
+        assert run(repo, "approve", "EXP-001", "poc")[0] == 3                  # brief missing
+        exp_doc(repo, f, "POC-BRIEF.md", "prove sync")
+        time.sleep(1.05)
+        assert run(repo, "approve", "EXP-001", "poc")[0] == 0
+        s = status(repo)
+        assert s["EXP-001: approach"] == "approved" and s["EXP-001: poc"] == "approved"
+        assert s["requirements"] == "not-started"                               # main untouched
+
+        # drift: editing the findings un-approves; re-approving the approach makes the PoC stale
+        exp_doc(repo, f, "FINDINGS.md", "# F\n**Chosen approach:** B, service worker cache + IndexedDB\n")
+        assert status(repo)["EXP-001: approach"] == "changed"
+        assert run(repo, "explore", "promote", "EXP-001")[0] == 3
+        time.sleep(1.05)
+        assert run(repo, "approve", "EXP-001", "approach")[0] == 0
+        assert status(repo)["EXP-001: poc"] == "stale"
+        assert run(repo, "explore", "promote", "EXP-001")[0] == 3
+        time.sleep(1.05)
+        assert run(repo, "approve", "EXP-001", "poc")[0] == 0
+
+        code, out = run(repo, "explore", "promote", "EXP-001")
+        assert code == 0 and "CR-001" in out, out
+        state = json.loads((Path(repo) / ".factory/state.json").read_text())
+        assert state["changes"]["CR-001"]["exploration"] == "EXP-001"
+        assert state["explorations"]["EXP-001"]["status"] == "promoted"
+        assert (Path(repo) / "docs/factory/changes/CR-001-offline-mode/01-requirements").is_dir()
+        assert "CR-001" in (Path(repo) / f"docs/factory/explorations/{f}/DECISION.md").read_text()
+        assert run(repo, "approve", "EXP-001", "poc")[0] == 3                  # frozen
+        assert run(repo, "explore", "promote", "EXP-001")[0] == 3
+        assert "EXP-001: approach" not in status(repo)                          # closed: hidden from brief
+        approve_all_main(repo)
+        code, out = run(repo, "check", "requirements", "--scope", "CR-001")
+        assert code == 0 and "promoted from EXP-001" in out and f in out, out
+        assert "EXP-001" in run(repo, "status")[1]
+
+        # reject: needs a reason, works through the `pre` injection, keeps the record
+        run(repo, "explore", "new", "Blockchain receipts")
+        assert run(repo, "explore", "reject", "EXP-002")[0] == 2
+        code, out = run(repo, "explore", "pre", "reject EXP-002 too costly for what it gives")
+        assert code == 0 and "REJECTED" in out, out
+        assert "too costly" in (Path(repo) / "docs/factory/explorations/EXP-002-blockchain-receipts/DECISION.md").read_text()
+        code, out = run(repo, "explore", "pre", "EXP-002")
+        assert "REJECTED" in out and "frozen" in out
+        assert "EXP-002" in run(repo, "explore", "pre", "")[1]                 # list
+        assert run(repo, "approve", "EXP-002", "approach")[0] == 3
+
+
+def test_hook_exploration_and_spike_guards():
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        run(repo, "explore", "new", "Offline mode")
+        f = "EXP-001-offline-mode"
+
+        def h(event, cwd=repo):
+            event.setdefault("cwd", cwd)
+            return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event),
+                                  capture_output=True, text=True, cwd=repo).returncode
+
+        def w(name):
+            return {"tool_name": "Write", "tool_input": {"file_path": f"{repo}/docs/factory/explorations/{f}/{name}"}}
+
+        def b(cmd):
+            return {"tool_name": "Bash", "tool_input": {"command": cmd}}
+
+        assert h(w("FINDINGS.md")) == 0
+        assert h(w("notes/research.md")) == 0
+        assert h(w("POC-BRIEF.md")) == 2                                        # approach not approved
+        assert h(w("DECISION.md")) == 2
+        assert h({"tool_name": "Write", "tool_input": {"file_path": f"{repo}/docs/factory/explorations/EXP-009-x/FINDINGS.md"}}) == 2
+        assert h(b(f"echo x > docs/factory/explorations/{f}/POC-REPORT.md")) == 2
+        assert h(b(f"echo x > docs/factory/explorations/{f}/FINDINGS.md")) == 0
+        assert h(b('bash "/p/scripts/gate" explore reject EXP-001 nah')) == 2
+        assert h(b('bash "/p/scripts/gate" explore pre "reject EXP-001 nah"')) == 2
+        assert h(b('bash "/p/scripts/gate" explore new Something')) == 0
+        assert h(b('bash "/p/scripts/gate" approve EXP-001 approach')) == 2
+
+        exp_doc(repo, f, "FINDINGS.md", "Chosen approach: A")
+        assert run(repo, "approve", "EXP-001", "approach")[0] == 0
+        assert h(w("POC-BRIEF.md")) == 0
+        assert h(b(f"echo x > docs/factory/explorations/{f}/POC-REPORT.md")) == 0
+
+        # spike branches: pushed, never PR'd or merged
+        assert h(b("git push -u origin spike/EXP-001-offline-mode")) == 0
+        assert h(b("gh pr create --head spike/EXP-001-offline-mode --fill")) == 2
+        assert h(b("git merge origin/spike/EXP-001-offline-mode")) == 2
+        assert h(b("git cherry-pick origin/spike/EXP-001-offline-mode~2")) == 2
+        assert h(b("git push origin spike/EXP-001-offline-mode:main")) == 2
+        with tempfile.TemporaryDirectory() as code:
+            subprocess.run(["git", "init", "-q", "-b", "main", code], check=True)
+            subprocess.run(["git", "-C", code, "-c", "user.name=t", "-c", "user.email=t@t",
+                            "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+            subprocess.run(["git", "-C", code, "checkout", "-q", "-b", "spike/EXP-001-offline-mode"], check=True)
+            assert h(b(f"cd {code} && gh pr create --fill")) == 2
+            assert h(b("gh pr create --fill"), cwd=code) == 2
+
+        # closed explorations are frozen
+        run(repo, "explore", "pre", "reject EXP-001 not needed")
+        assert h(w("FINDINGS.md")) == 2
+
+
 if __name__ == "__main__":
     test_spec_pack_extracts_only_referenced_specs()
     test_bug_priority_ids_and_story_reopen()
+    test_exploration_flow()
+    test_hook_exploration_and_spike_guards()
     test_autonomy_settings_and_protection()
     test_story_and_epic_sync()
     test_task_selection_next_and_story()
