@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Estimates, time spent, deviations and calibration for factory tasks.
 
-Two quantities per task, both in hours:
+Who spends the time:
+  agent   factory tasks (be/fe/bug issues): the agents' hours.
+  you     manual QA checks (MAN-NN rows in a TEST-PLAN.md): your hours. They are tracked when their
+          scope is an open change request (or the baseline before any CR was merged), or once they
+          have an estimate or time recorded.
+
+Two quantities per factory task, both in hours:
   agent   the factory's agents working on it (developer, QA reviewer, fix rounds).
           Estimated at planning, measured automatically by /factory:build.
   human   what a human developer would need for the same task. Estimated at planning;
@@ -17,6 +23,10 @@ Where the data lives:
               script (the hook blocks direct edits). One JSON object per line:
                 {"ts": "...", "event": "start"|"stop", "task": "owner/repo#N", "stage": "dev|qa|fix"}
                 {"ts": "...", "event": "human", "task": "owner/repo#N", "hours": 7.5, "note": "..."}
+  manual QA   estimates: an "Your hours" (or "Estimate") column in the manual-checks table of a
+              TEST-PLAN.md, or `time estimate MAN-NN <hours>` (also used to re-estimate);
+              time: `time start|stop MAN-NN` (a timer) or `time log MAN-NN <hours>`, with
+              `--result pass|fail`. MAN ids repeat across CRs: write CR-009/MAN-21 when ambiguous.
   dashboard   `time export` writes a SQLite database for Grafana (see dashboard/ in the
               factory repo): $FACTORY_METRICS_DIR/factory.db (default ~/.factory/metrics).
               One shared file, one row set per product. Learning stays per product.
@@ -25,6 +35,10 @@ Usage (through the gate wrapper):
   bash scripts/gate time start <task> <dev|qa|fix>     record a stage start (task: api#N, web#N, owner/repo#N)
   bash scripts/gate time stop  <task> <dev|qa|fix> [--result pr|blocked|passed|changes|failed]
   bash scripts/gate time human <task> <hours> [note]   QA's after-the-fact human-dev estimate
+  bash scripts/gate time manual [open|all|CR-NNN]       your manual QA checks: status, estimate, time
+  bash scripts/gate time start|stop MAN-NN [--result pass|fail]   timer for a manual check
+  bash scripts/gate time log <task> <hours> [--result pass|fail] [--stage dev|qa|fix|manual]
+  bash scripts/gate time estimate MAN-NN <hours> [note]           (re-)estimate a manual check
   bash scripts/gate time report [all|main|CR-NNN] [--export]
                                                        progress: spent, remaining, forecast, deviations
                                                        (--export also refreshes the Grafana database)
@@ -52,7 +66,9 @@ from pathlib import Path
 
 import gate
 
-STAGES = ("dev", "qa", "fix")
+STAGES = ("dev", "qa", "fix", "manual")
+AGENT_STAGES = ("dev", "qa", "fix")
+MAN_RE = re.compile(r"^(?:(CR-\d{3,}|main)[/:@ ])?(MAN-\d+)$", re.I)
 STALE_HOURS = 6.0
 MIN_SAMPLES = 3
 TIMELOG = gate.ROOT / ".factory" / "timelog.jsonl"
@@ -109,7 +125,7 @@ def parse_hours(text: str | None) -> float | None:
 def fmt(h) -> str:
     if h is None:
         return "-"
-    return f"{h:.1f}h"
+    return (f"{h:.2f}".rstrip("0").rstrip(".") or "0") + "h"
 
 
 def pct(a, b) -> str:
@@ -153,6 +169,9 @@ def code_repos() -> dict:
 
 
 def norm_task(raw: str) -> str:
+    m = MAN_RE.match(raw.strip())
+    if m:
+        return manual_key(m.group(1), m.group(2))
     t = raw.strip().lower().lstrip("#")
     m = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)", t)
     if m:
@@ -196,6 +215,12 @@ def segments(events: list[dict], now: _dt.datetime | None = None) -> dict:
     open_: dict = {}
     out: dict = {}
     for e in events:
+        if e.get("event") == "log" and e.get("stage") in STAGES and isinstance(e.get("hours"), (int, float)):
+            end = parse_ts(e["ts"])
+            out.setdefault(e.get("task", "").lower(), []).append({
+                "stage": e["stage"], "start": end - _dt.timedelta(hours=float(e["hours"])), "end": end,
+                "hours": round(float(e["hours"]), 3), "result": e.get("result"), "state": "closed"})
+            continue
         if e.get("event") not in ("start", "stop") or e.get("stage") not in STAGES:
             continue
         key = (e.get("task", "").lower(), e["stage"])
@@ -265,6 +290,133 @@ def milestones() -> dict:
     return by_list
 
 
+# ---------------------------------------------------------------- manual QA checks (your time)
+
+def manual_key(scope: str | None, mid: str) -> str:
+    mid = mid.upper()
+    if scope:
+        return f"{'main' if scope.lower() == 'main' else scope.upper()}/{mid}".lower()
+    hits = [c for c in manual_checks() if c["id"] == mid]
+    if not hits:
+        raise ValueError(f"{mid} is not in any TEST-PLAN.md manual-checks table")
+    if len(hits) > 1:
+        tracked = [c for c in hits if c["auto"]]
+        if len(tracked) == 1:
+            return tracked[0]["key"]
+        raise ValueError(f"{mid} exists in several scopes ({', '.join(c['scope'] for c in hits)}): "
+                         f"write it as e.g. {hits[-1]['scope']}/{mid}")
+    return hits[0]["key"]
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"[*`]", "", text).strip()
+
+
+def manual_checks() -> list[dict]:
+    """MAN-NN rows from the manual-checks tables of the baseline and CR test plans."""
+    files = [(gate.DOCS / "05-qa" / "TEST-PLAN.md", None)]
+    if gate.CHANGES.exists():
+        for f in sorted(gate.CHANGES.glob("CR-*/05-qa/TEST-PLAN.md")):
+            m = re.match(r"(CR-\d{3,})", f.parent.parent.name, re.I)
+            if m:
+                files.append((f, m.group(1).upper()))
+    found: dict = {}
+    for f, fixed in files:
+        if not f.exists():
+            continue
+        scope, header = fixed or "main", None
+        for line in f.read_text(encoding="utf-8").splitlines():
+            if not line.strip().startswith("|"):
+                header = None
+                if not fixed:
+                    cr = re.search(r"\b(CR-\d{3,})\b", line)
+                    if re.match(r"\s*#", line) and "manual" in line.lower() and not cr:
+                        scope = "main"
+                    elif cr and ("manual" in line.lower() or re.match(r"\s*(#+\s*|\*\*)CR-\d{3,}", line)):
+                        scope = cr.group(1).upper()
+                continue
+            cells = _cells(line)
+            if header is None:
+                header = [c.lower() for c in cells]
+                continue
+            if all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+                continue
+            row = dict(zip(header, cells))
+            mid = _clean(row.get("id", ""))
+            if not re.fullmatch(r"MAN-\d+", mid):
+                continue
+            est_col = next((h for h in header if "hour" in h or "estimate" in h), None)
+            check = next((row[h] for h in header if h.startswith("check")), "") or ""
+            key = f"{scope}/{mid}".lower()
+            prev = found.get(key)
+            item = {"id": mid, "scope": scope, "key": key, "title": _clean(check)[:160],
+                    "est_plan": parse_hours(_clean(row.get(est_col, ""))) if est_col else None,
+                    "waived": "waived" in line.lower()}
+            if prev is None or (fixed and prev["est_plan"] is None) or item["est_plan"] is not None:
+                found[key] = item
+    state = gate.load() or {}
+    changes = state.get("changes", {})
+    open_crs = {k for k, v in changes.items() if v.get("status") == "open"}
+    any_merged = any(v.get("status") == "merged" for v in changes.values())
+    out = []
+    for c in found.values():
+        c["auto"] = (c["scope"] in open_crs or (c["scope"] == "main" and not any_merged)) and not c["waived"]
+        out.append(c)
+    return sorted(out, key=lambda c: (c["scope"] != "main", c["scope"], int(c["id"].split("-")[1])))
+
+
+def manual_rows(events: list[dict], segs: dict) -> list[dict]:
+    est_events: dict = {}
+    results: dict = {}
+    touched = set()
+    for e in events:
+        k = e.get("task", "").lower()
+        if e.get("event") == "estimate" and isinstance(e.get("hours"), (int, float)):
+            est_events.setdefault(k, []).append(float(e["hours"]))
+        if e.get("result") in ("pass", "fail") and e.get("stage") == "manual":
+            results[k] = (e["result"], parse_ts(e["ts"]))
+        if "/man-" in k:
+            touched.add(k)
+    rows = []
+    for c in manual_checks():
+        k = c["key"]
+        if not (c["auto"] or k in touched):
+            continue
+        evs = est_events.get(k, [])
+        est = c["est_plan"] if c["est_plan"] is not None else (evs[0] if evs else None)
+        rev = (evs[-1] if c["est_plan"] is not None else (evs[-1] if len(evs) > 1 else None)) if evs else None
+        mine = [x for x in segs.get(k, []) if x["stage"] == "manual"]
+        spent = round(sum(x["hours"] for x in mine), 3)
+        running = any(x["state"] == "running" for x in mine)
+        res = results.get(k)
+        if running:
+            status = "in progress"
+        elif res and res[0] == "pass":
+            status = "passed"
+        elif res and res[0] == "fail":
+            status = "failed"
+        else:
+            status = "to do"
+        rows.append({
+            "ref": c["id"] if c["scope"] == "main" else f"{c['scope']}/{c['id']}", "full": k, "tid": c["id"],
+            "title": c["title"], "who": "you", "repo_kind": "you", "kind": "manual", "size": None,
+            "story": None, "scope": c["scope"], "milestone": None,
+            "state": "closed" if status == "passed" else "open", "status": status,
+            "est_agent": est, "est_human": None, "rev_agent": rev, "rev_human": None, "rev_note": None,
+            "cur_agent": rev if rev is not None else est, "cur_human": None,
+            "actual": spent, "dev": 0.0, "qa": 0.0, "fix": 0.0, "manual": spent, "fix_rounds": 0,
+            "running": running, "abandoned": sum(1 for x in mine if x["state"] == "abandoned"),
+            "segments": mine, "tracked": spent > 0, "posthoc_human": None,
+            "created": None, "closed": res[1] if status == "passed" else None,
+            "first_start": mine[0]["start"] if mine else None,
+        })
+    return rows
+
+
 # ---------------------------------------------------------------- the model
 
 def kind_of(t: dict) -> str:
@@ -280,11 +432,22 @@ def kind_of(t: dict) -> str:
     return "feature"
 
 
-def build_model(data: dict | None = None, events: list[dict] | None = None) -> dict:
+STATUS_LABEL = {"ready": "Ready", "waiting": "Waiting", "in-review": "In review", "blocked": "Blocked",
+                "gated": "Gated", "done": "Done", "to do": "To do", "in progress": "In progress",
+                "failed": "Failed", "passed": "Passed"}
+
+
+def build_model(data: dict | None = None, events: list[dict] | None = None, agent: bool = True) -> dict:
     import tasks as tasks_mod
-    if data is None:
+    if data is None and agent:
         data = tasks_mod.collect()
         tasks_mod.classify(data)
+    if data is None:
+        try:
+            prod = json.loads(gate.CONFIG.read_text(encoding="utf-8"))["repos"]["product"]["github"]
+        except (OSError, ValueError, KeyError, TypeError):
+            prod = gate.ROOT.name
+        data = {"tasks": [], "product": prod.lower()}
     events = read_log() if events is None else events
     now = now_dt()
     segs = segments(events, now)
@@ -296,18 +459,18 @@ def build_model(data: dict | None = None, events: list[dict] | None = None) -> d
         body = t.get("body") or ""
         est = parse_estimates(body)
         mine = segs.get(key, [])
-        by_stage = {s: round(sum(x["hours"] for x in mine if x["stage"] == s), 3) for s in STAGES}
+        by_stage = {s: round(sum(x["hours"] for x in mine if x["stage"] == s), 3) for s in AGENT_STAGES}
         actual = round(sum(by_stage.values()), 3)
         cur = est["rev_agent"] if est["rev_agent"] is not None else est["est_agent"]
         cur_h = est["rev_human"] if est["rev_human"] is not None else est["est_human"]
         rk = "be" if "be" in t["labels"] else "fe" if "fe" in t["labels"] else t["key"]
         rows.append({
-            "ref": t["ref"], "full": key, "tid": t["tid"], "title": t["title"], "repo_kind": rk,
+            "ref": t["ref"], "full": key, "tid": t["tid"], "title": t["title"], "who": "agent", "repo_kind": rk,
             "kind": kind_of(t), "size": parse_size(body), "story": t.get("story"),
             "scope": t.get("cr") or "main", "milestone": ms.get((t["tid"] or "").upper()),
             "state": t["state"], "status": t.get("status", "done" if t["state"] == "closed" else "open"),
             **est, "cur_agent": cur, "cur_human": cur_h,
-            "actual": actual, "dev": by_stage["dev"], "qa": by_stage["qa"], "fix": by_stage["fix"],
+            "actual": actual, "dev": by_stage["dev"], "qa": by_stage["qa"], "fix": by_stage["fix"], "manual": 0.0,
             "fix_rounds": sum(1 for x in mine if x["stage"] == "fix" and x["state"] != "abandoned"),
             "running": any(x["state"] == "running" for x in mine),
             "abandoned": sum(1 for x in mine if x["state"] == "abandoned"),
@@ -316,6 +479,11 @@ def build_model(data: dict | None = None, events: list[dict] | None = None) -> d
             "created": parse_ts(t.get("createdAt")), "closed": parse_ts(t.get("closedAt")),
             "first_start": mine[0]["start"] if mine else None,
         })
+    rows += manual_rows(events, segs)
+    for r in rows:
+        r["status_label"] = STATUS_LABEL.get(r["status"], r["status"].capitalize())
+        r["type"] = {"manual": "Manual QA", "bug": "Bug"}.get(r["kind"]) or \
+            {"be": "Backend", "fe": "Frontend"}.get(r["repo_kind"], r["repo_kind"])
     cal = calibrate(rows)
     for r in rows:
         f, src, _n = factor_for(cal, r)
@@ -324,6 +492,9 @@ def build_model(data: dict | None = None, events: list[dict] | None = None) -> d
             r["remaining"] = r["forecast"] = 0.0
         elif r["cur_agent"] is None:
             r["remaining"] = r["forecast"] = None
+        elif r["status"] == "failed":  # a failed manual check is run again in full
+            r["remaining"] = r["cur_agent"]
+            r["forecast"] = round(r["cur_agent"] * f, 3)
         else:
             r["remaining"] = round(max(r["cur_agent"] - r["actual"], 0.0), 3)
             expected = r["cur_agent"] * f
@@ -332,6 +503,8 @@ def build_model(data: dict | None = None, events: list[dict] | None = None) -> d
 
 
 def cats(r: dict) -> list[str]:
+    if r["who"] == "you":
+        return ["manual"]
     return [f"{r['repo_kind']}/{r['kind']}/{r['size'] or '?'}", f"{r['repo_kind']}/{r['kind']}", r["kind"], "all"]
 
 
@@ -370,17 +543,22 @@ def factor_for(cal: dict, r: dict) -> tuple[float, str, int]:
 # ---------------------------------------------------------------- report
 
 def summarise(rows: list[dict]) -> dict:
-    est = [r for r in rows if r["cur_agent"] is not None]
-    return {
-        "tasks": len(rows), "done": sum(1 for r in rows if r["state"] == "closed"),
-        "est": round(sum(r["cur_agent"] for r in est), 2),
-        "est_orig": round(sum(r["est_agent"] or 0 for r in rows), 2),
-        "est_human": round(sum(r["cur_human"] or 0 for r in rows), 2),
-        "spent": round(sum(r["actual"] for r in rows), 2),
-        "remaining": round(sum(r["remaining"] or 0 for r in rows if r["state"] != "closed"), 2),
-        "forecast": round(sum(r["forecast"] or 0 for r in rows if r["state"] != "closed"), 2),
-        "unestimated": sum(1 for r in rows if r["cur_agent"] is None and r["state"] != "closed"),
-    }
+    """Totals; hours are kept apart by who spends them (agent / you): they are different resources."""
+    out = {"tasks": len(rows), "done": sum(1 for r in rows if r["state"] == "closed"),
+           "est_human": round(sum(r["cur_human"] or 0 for r in rows), 2)}
+    for who in ("agent", "you"):
+        rs = [r for r in rows if r["who"] == who]
+        est = [r for r in rs if r["cur_agent"] is not None]
+        out[who] = {
+            "tasks": len(rs), "done": sum(1 for r in rs if r["state"] == "closed"),
+            "est": round(sum(r["cur_agent"] for r in est), 2),
+            "est_orig": round(sum(r["est_agent"] or 0 for r in rs), 2),
+            "spent": round(sum(r["actual"] for r in rs), 2),
+            "remaining": round(sum(r["remaining"] or 0 for r in rs if r["state"] != "closed"), 2),
+            "forecast": round(sum(r["forecast"] or 0 for r in rs if r["state"] != "closed"), 2),
+            "unestimated": sum(1 for r in rs if r["cur_agent"] is None and r["state"] != "closed"),
+        }
+    return out
 
 
 def table(headers: list[str], body: list[list[str]]) -> None:
@@ -392,6 +570,10 @@ def table(headers: list[str], body: list[list[str]]) -> None:
         print("  " + "  ".join(str(x).ljust(w[i]) for i, x in enumerate(b)))
 
 
+def row_label(r: dict) -> str:
+    return r["ref"] if r["who"] == "you" else f"{r['ref']} {r['tid']}"
+
+
 def group_rows(rows, key):
     out = {}
     for r in rows:
@@ -399,8 +581,17 @@ def group_rows(rows, key):
     return out
 
 
+def model_or_manual() -> dict:
+    """The full model; if GitHub can't be read, the manual QA checks alone (they need no GitHub)."""
+    try:
+        return build_model()
+    except RuntimeError as e:
+        print(f"TASKS UNAVAILABLE ({e}): showing manual QA checks only.")
+        return build_model(agent=False)
+
+
 def cmd_report(scope: str, export: bool = False) -> None:
-    m = build_model()
+    m = model_or_manual()
     if export:
         try:
             cmd_export(quiet=True, model=m)
@@ -414,15 +605,21 @@ def cmd_report(scope: str, export: bool = False) -> None:
         print("TIME: no factory tasks yet (or none in that scope).")
         return
     s = summarise(rows)
-    print("TIME (agent hours; human-dev equivalent where shown)")
-    print(f"  Tasks: {s['done']}/{s['tasks']} done · estimated {fmt(s['est'])} agent"
-          f" [{fmt(s['est_human'])} human-dev] · spent {fmt(s['spent'])}")
-    print(f"  Remaining: {fmt(s['remaining'])} by estimate -> forecast {fmt(s['forecast'])} "
-          f"(calibrated with this product's history)")
-    if s["est_orig"] and abs(s["est_orig"] - s["est"]) > 0.05:
-        print(f"  Re-estimates moved the plan from {fmt(s['est_orig'])} to {fmt(s['est'])}.")
-    if s["unestimated"]:
-        print(f"  WARNING: {s['unestimated']} open task(s) have no estimate and are not in the totals.")
+    a, y = s["agent"], s["you"]
+    print("TIME (hours)")
+    print(f"  Tasks: {s['done']}/{s['tasks']} done")
+    print(f"  Agents (factory tasks {a['done']}/{a['tasks']}): estimated {fmt(a['est'])} · spent {fmt(a['spent'])} · "
+          f"remaining {fmt(a['remaining'])} -> forecast {fmt(a['forecast'])}"
+          + (f"  [human-dev equivalent {fmt(s['est_human'])}]" if s["est_human"] else ""))
+    if y["tasks"]:
+        print(f"  You (manual QA checks {y['done']}/{y['tasks']}): estimated {fmt(y['est'])} · spent {fmt(y['spent'])} · "
+              f"remaining {fmt(y['remaining'])} -> forecast {fmt(y['forecast'])}")
+    print("  Forecasts are corrected with this product's history (see CALIBRATION).")
+    for who, t in (("agent", a), ("manual QA", y)):
+        if t["est_orig"] and abs(t["est_orig"] - t["est"]) > 0.05:
+            print(f"  Re-estimates moved the {who} plan from {fmt(t['est_orig'])} to {fmt(t['est'])}.")
+        if t["unestimated"]:
+            print(f"  WARNING: {t['unestimated']} open {who} item(s) have no estimate and are not in the totals.")
     running = [r for r in rows if r["running"]]
     if running:
         print("  Running now: " + ", ".join(f"{r['ref']} ({r['segments'][-1]['stage']})" for r in running))
@@ -435,33 +632,36 @@ def cmd_report(scope: str, export: bool = False) -> None:
             continue
         for g, rs in sorted(groups.items()):
             t = summarise(rs)
-            body.append([f"{label} {g}", f"{t['done']}/{t['tasks']}", fmt(t["est"]), fmt(t["spent"]),
-                         fmt(t["remaining"]), fmt(t["forecast"])])
-    table(["Group", "Done", "Estimate", "Spent", "Remaining", "Forecast"], body)
+            a, y = t["agent"], t["you"]
+            body.append([f"{label} {g}", f"{t['done']}/{t['tasks']}", fmt(a["est"]), fmt(a["spent"]),
+                         fmt(a["forecast"]), fmt(y["est"]) if y["tasks"] else "-",
+                         fmt(y["spent"]) if y["tasks"] else "-", fmt(y["forecast"]) if y["tasks"] else "-"])
+    table(["Group", "Done", "Agent est", "Agent spent", "Agent left", "Your est", "Your spent", "Your left"], body)
 
     done = [r for r in samples(rows)]
     if done:
         print("\nBIGGEST DEVIATIONS (done tasks, actual vs estimate)")
         done.sort(key=lambda r: abs(r["actual"] - r["cur_agent"]), reverse=True)
         table(["Task", "Estimate", "Actual", "Dev", "QA", "Fix (rounds)", "Deviation", "Human plan->QA"],
-              [[f"{r['ref']} {r['tid']}", fmt(r["cur_agent"]), fmt(r["actual"]), fmt(r["dev"]), fmt(r["qa"]),
-                f"{fmt(r['fix'])} ({r['fix_rounds']})", pct(r["actual"], r["cur_agent"]),
+              [[row_label(r), fmt(r["cur_agent"]), fmt(r["actual"]), fmt(r["dev"]), fmt(r["qa"]),
+                f"{fmt(r['fix'])} ({r['fix_rounds']})" if r["who"] == "agent" else "manual QA",
+                pct(r["actual"], r["cur_agent"]),
                 f"{fmt(r['cur_human'])}->{fmt(r['posthoc_human'])}"] for r in done[:8]])
     over = [r for r in rows if r["state"] != "closed" and r["cur_agent"] and r["actual"] > r["cur_agent"]]
     if over:
         print("\nOPEN TASKS ALREADY OVER ESTIMATE")
         table(["Task", "Estimate", "Spent so far"],
-              [[f"{r['ref']} {r['tid']}", fmt(r["cur_agent"]), fmt(r["actual"])] for r in over])
+              [[row_label(r), fmt(r["cur_agent"]), fmt(r["actual"])] for r in over])
     untracked = [r for r in rows if r["state"] == "closed" and not r["tracked"]]
     if untracked:
-        print(f"\nNote: {len(untracked)} closed task(s) have no recorded agent time "
+        print(f"\nNote: {len(untracked)} closed task(s) have no recorded time "
               "(built before tracking, or outside /factory:build); they are left out of the learning.")
     print_calibration(m["cal"], short=True)
 
 
 def print_calibration(cal: dict, short: bool = False) -> None:
     keys = [k for k in cal if k != "human"]
-    print("\nCALIBRATION (actual / estimate, agent time; median of done tasks)")
+    print("\nCALIBRATION (actual / estimate, median of done items; 'manual' = your QA checks)")
     if not keys:
         print("  No history yet: estimates are used as-is (factor 1.0).")
     else:
@@ -517,28 +717,58 @@ def metrics_path() -> Path:
     return base / "factory.db"
 
 
+SCHEMA_VERSION = 2
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS tasks (
-  product TEXT, ref TEXT, tid TEXT, title TEXT, repo_kind TEXT, kind TEXT, size TEXT,
-  category TEXT, story TEXT, scope TEXT, milestone TEXT, state TEXT, status TEXT,
-  est_agent_h REAL, est_human_h REAL, rev_agent_h REAL, rev_human_h REAL,
-  cur_agent_h REAL, cur_human_h REAL, actual_agent_h REAL, dev_h REAL, qa_h REAL, fix_h REAL,
-  fix_rounds INTEGER, posthoc_human_h REAL, deviation_h REAL, deviation_pct REAL,
-  remaining_h REAL, forecast_h REAL, factor REAL, tracked INTEGER,
+  product TEXT, ref TEXT, tid TEXT, title TEXT, who TEXT, type TEXT, kind TEXT, repo_kind TEXT, size TEXT,
+  category TEXT, story TEXT, scope TEXT, version TEXT, milestone TEXT, state TEXT, status TEXT,
+  est_h REAL, rev_h REAL, cur_h REAL, actual_h REAL, remaining_h REAL, forecast_h REAL,
+  deviation_h REAL, deviation_pct REAL, dev_h REAL, qa_h REAL, fix_h REAL, manual_h REAL, fix_rounds INTEGER,
+  est_human_h REAL, cur_human_h REAL, posthoc_human_h REAL, factor REAL, tracked INTEGER,
   created_time INTEGER, closed_time INTEGER, first_start_time INTEGER);
 CREATE TABLE IF NOT EXISTS stages (
-  product TEXT, ref TEXT, tid TEXT, stage TEXT, time INTEGER, end_time INTEGER, hours REAL,
-  result TEXT, state TEXT);
+  product TEXT, ref TEXT, tid TEXT, who TEXT, scope TEXT, version TEXT, stage TEXT,
+  time INTEGER, end_time INTEGER, hours REAL, result TEXT, state TEXT);
 CREATE TABLE IF NOT EXISTS burndown (
-  product TEXT, scope TEXT, time INTEGER, remaining_est_h REAL, spent_h REAL, done_tasks INTEGER);
+  product TEXT, scope TEXT, version TEXT, time INTEGER, agent_remaining_h REAL, agent_spent_h REAL,
+  your_remaining_h REAL, your_spent_h REAL, done_tasks INTEGER);
 CREATE TABLE IF NOT EXISTS calibration (
   product TEXT, category TEXT, samples INTEGER, factor REAL, p80 REAL);
-CREATE TABLE IF NOT EXISTS calibration_history (
-  product TEXT, time INTEGER, ratio REAL, rolling_median REAL, ref TEXT, category TEXT);
 CREATE TABLE IF NOT EXISTS summary (
-  product TEXT, scope TEXT, tasks INTEGER, done INTEGER, est_h REAL, est_human_h REAL,
-  spent_h REAL, remaining_h REAL, forecast_h REAL, unestimated INTEGER, time INTEGER);
+  product TEXT, scope TEXT, version TEXT, tasks INTEGER, done INTEGER,
+  agent_est_h REAL, agent_spent_h REAL, agent_remaining_h REAL, agent_forecast_h REAL,
+  your_est_h REAL, your_spent_h REAL, your_remaining_h REAL, your_forecast_h REAL,
+  est_human_h REAL, unestimated INTEGER, time INTEGER);
 """
+OLD_TABLES = ("tasks", "stages", "burndown", "calibration", "calibration_history", "summary")
+
+
+def versions() -> dict:
+    """{scope: version} for change requests: a `**Version:**` line in the CR's requirements, else
+    "Version X.Y.Z" in its title. The baseline is "baseline"."""
+    out = {"main": "baseline"}
+    state = gate.load() or {}
+    for cid, c in state.get("changes", {}).items():
+        v = None
+        folder = gate.CHANGES
+        req = sorted(folder.glob(f"{cid}-*/01-requirements/*.md")) if folder.exists() else []
+        for f in req:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                if re.match(r"\W*version\W*[:|]", line.strip(), re.I):
+                    m = re.search(r"\bv?(\d+\.\d+(?:\.\d+)?)\b", line)
+                    if m:
+                        v = m.group(1)
+                        break
+            if v:
+                break
+        if not v:
+            m = re.search(r"\bversion\s+v?(\d+\.\d+(?:\.\d+)?)\b", c.get("title", ""), re.I)
+            v = m.group(1) if m else None
+        if v and v.count(".") == 1:
+            v += ".0"
+        out[cid] = v or f"{cid} (no version)"
+    return out
 
 
 def burndown(rows: list[dict], now: _dt.datetime) -> list[tuple]:
@@ -549,21 +779,41 @@ def burndown(rows: list[dict], now: _dt.datetime) -> list[tuple]:
     points = []
     while day <= now:
         end = min(day + _dt.timedelta(days=1), now)
-        rem = sum(max((r["cur_agent"] or 0) - sum(s["hours"] for s in r["segments"]
-                                                   if s["end"] and s["end"] <= end), 0)
-                  for r in rows if (not r["created"] or r["created"] <= end)
-                  and not (r["closed"] and r["closed"] <= end))
-        spent = sum(s["hours"] for r in rows for s in r["segments"] if s["end"] and s["end"] <= end)
+        vals = []
+        for who in ("agent", "you"):
+            rs = [r for r in rows if r["who"] == who]
+            rem = sum(max((r["cur_agent"] or 0) - sum(x["hours"] for x in r["segments"]
+                                                      if x["end"] and x["end"] <= end), 0)
+                      for r in rs if (not r["created"] or r["created"] <= end)
+                      and not (r["closed"] and r["closed"] <= end))
+            spent = sum(x["hours"] for r in rs for x in r["segments"] if x["end"] and x["end"] <= end)
+            vals += [round(rem, 3), round(spent, 3)]
         done = sum(1 for r in rows if r["closed"] and r["closed"] <= end)
-        points.append((epoch(end), round(rem, 3), round(spent, 3), done))
+        points.append((epoch(end), *vals, done))
         day += _dt.timedelta(days=1)
     return points
+
+
+def _prepare(con) -> None:
+    has = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    ver = None
+    if "meta" in has:
+        row = con.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+        ver = int(row[0]) if row else None
+    if has and ver != SCHEMA_VERSION:  # older layout: rebuilt; other products refill on their next export
+        for t in OLD_TABLES + ("meta",):
+            con.execute(f"DROP TABLE IF EXISTS {t}")
+    con.executescript(SCHEMA)
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
 
 
 def cmd_export(quiet: bool = False, model: dict | None = None) -> None:
     m = model or build_model()
     rows, cal, now = m["rows"], m["cal"], m["now"]
     product = m["data"]["product"].split("/")[-1].removesuffix("-product")
+    vers = versions()
+    for r in rows:
+        r["version"] = vers.get(r["scope"], r["scope"])
     dest = metrics_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix="factory-", suffix=".db", dir=str(dest.parent))
@@ -574,40 +824,38 @@ def cmd_export(quiet: bool = False, model: dict | None = None) -> None:
             src = sqlite3.connect(str(dest))
             src.backup(con)
             src.close()
-        con.executescript(SCHEMA)
-        for tbl in ("tasks", "stages", "burndown", "calibration", "calibration_history", "summary"):
+        _prepare(con)
+        for tbl in ("tasks", "stages", "burndown", "calibration", "summary"):
             con.execute(f"DELETE FROM {tbl} WHERE product = ?", (product,))
         for r in rows:
             dev = (r["actual"] - r["cur_agent"]) if (r["tracked"] and r["cur_agent"] and r["state"] == "closed") else None
-            con.execute("INSERT INTO tasks VALUES (" + ",".join("?" * 34) + ")", (
-                product, r["ref"], r["tid"], r["title"], r["repo_kind"], r["kind"], r["size"], cats(r)[0],
-                r["story"], r["scope"], r["milestone"], r["state"], r["status"],
-                r["est_agent"], r["est_human"], r["rev_agent"], r["rev_human"], r["cur_agent"], r["cur_human"],
-                r["actual"], r["dev"], r["qa"], r["fix"], r["fix_rounds"], r["posthoc_human"],
-                round(dev, 3) if dev is not None else None,
-                round(dev / r["cur_agent"] * 100, 1) if dev is not None else None,
-                r["remaining"], r["forecast"], r["factor"], int(r["tracked"]),
-                epoch(r["created"]), epoch(r["closed"]), epoch(r["first_start"])))
-            for s in r["segments"]:
-                con.execute("INSERT INTO stages VALUES (?,?,?,?,?,?,?,?,?)", (
-                    product, r["ref"], r["tid"], s["stage"], epoch(s["start"]), epoch(s["end"]),
-                    s["hours"], s["result"], s["state"]))
-        for scope in ["all"] + sorted({r["scope"] for r in rows}):
-            rs = rows if scope == "all" else [r for r in rows if r["scope"] == scope]
+            vals = (product, r["ref"], r["tid"], r["title"], r["who"], r["type"], r["kind"], r["repo_kind"], r["size"],
+                    cats(r)[0], r["story"], r["scope"], r["version"], r["milestone"], r["state"], r["status_label"],
+                    r["est_agent"], r["rev_agent"], r["cur_agent"], r["actual"], r["remaining"], r["forecast"],
+                    round(dev, 3) if dev is not None else None,
+                    round(dev / r["cur_agent"] * 100, 1) if dev is not None else None,
+                    r["dev"], r["qa"], r["fix"], r["manual"], r["fix_rounds"],
+                    r["est_human"], r["cur_human"], r["posthoc_human"], r["factor"], int(r["tracked"]),
+                    epoch(r["created"]), epoch(r["closed"]), epoch(r["first_start"]))
+            con.execute(f"INSERT INTO tasks VALUES ({','.join('?' * len(vals))})", vals)
+            for x in r["segments"]:
+                con.execute("INSERT INTO stages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
+                    product, r["ref"], r["tid"], r["who"], r["scope"], r["version"], x["stage"],
+                    epoch(x["start"]), epoch(x["end"]), x["hours"], x["result"], x["state"]))
+        groups = [("all", "all", rows)]
+        groups += [(sc, vers.get(sc, sc), [r for r in rows if r["scope"] == sc]) for sc in sorted({r["scope"] for r in rows})]
+        for scope, version, rs in groups:
             for p in burndown(rs, now):
-                con.execute("INSERT INTO burndown VALUES (?,?,?,?,?,?)", (product, scope, *p))
+                con.execute("INSERT INTO burndown VALUES (?,?,?,?,?,?,?,?,?)", (product, scope, version, *p))
             t = summarise(rs)
-            con.execute("INSERT INTO summary VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
-                product, scope, t["tasks"], t["done"], t["est"], t["est_human"], t["spent"],
-                t["remaining"], t["forecast"], t["unestimated"], epoch(now)))
+            a, y = t["agent"], t["you"]
+            con.execute("INSERT INTO summary VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                product, scope, version, t["tasks"], t["done"],
+                a["est"], a["spent"], a["remaining"], a["forecast"],
+                y["est"], y["spent"], y["remaining"], y["forecast"],
+                t["est_human"], a["unestimated"] + y["unestimated"], epoch(now)))
         for c, g in cal.items():
             con.execute("INSERT INTO calibration VALUES (?,?,?,?,?)", (product, c, g["n"], g["factor"], g["p80"]))
-        hist, ratios = sorted(samples(rows), key=lambda r: r["closed"] or now), []
-        for r in hist:
-            ratios.append(r["actual"] / r["cur_agent"])
-            con.execute("INSERT INTO calibration_history VALUES (?,?,?,?,?,?)", (
-                product, epoch(r["closed"] or now), round(ratios[-1], 3),
-                round(statistics.median(ratios[-10:]), 3), r["ref"], cats(r)[0]))
         con.commit()
         con.close()
         os.replace(tmp, dest)  # atomic: Grafana never sees a half-written file
@@ -615,39 +863,108 @@ def cmd_export(quiet: bool = False, model: dict | None = None) -> None:
         if os.path.exists(tmp):
             os.remove(tmp)
     if not quiet:
-        print(f"EXPORT: {len(rows)} task(s) of '{product}' written to {dest}")
+        print(f"EXPORT: {len(rows)} item(s) of '{product}' written to {dest}")
 
 
 # ---------------------------------------------------------------- entry point
+
+def _opt(args: list[str], name: str):
+    if name in args:
+        i = args.index(name)
+        if i + 1 < len(args):
+            return args[i + 1].lower()
+    return None
+
+
+def is_manual(task: str) -> bool:
+    return "/man-" in task
+
+
+def cmd_manual(which: str) -> None:
+    m = build_model(agent=False)
+    vers = versions()
+    rows = [r for r in m["rows"] if r["who"] == "you"]
+    if which and which.lower() not in ("open", "all"):
+        rows = [r for r in rows if r["scope"].lower() == which.lower()]
+    elif which.lower() != "all":
+        rows = [r for r in rows if r["status"] != "passed"]
+    if not rows:
+        print("MANUAL QA: nothing to do. (Checks are tracked for open change requests, or once they have an "
+              "estimate or time: `gate time estimate MAN-NN <hours>`.)")
+        return
+    s = summarise(rows)["you"]
+    print(f"MANUAL QA CHECKS (your hours): {s['done']}/{s['tasks']} passed · estimated {fmt(s['est'])} · "
+          f"spent {fmt(s['spent'])} · remaining {fmt(s['remaining'])} -> forecast {fmt(s['forecast'])}")
+    table(["Check", "Version", "Status", "Estimate", "Spent", "Left", "What"],
+          [[r["ref"], vers.get(r["scope"], r["scope"]), r["status_label"], fmt(r["cur_agent"]), fmt(r["actual"]),
+            fmt(r["forecast"]), r["title"][:70]] for r in rows])
+
 
 def cmd(args: list[str]) -> None:
     args = [a for a in args if a.strip()]
     sub = args[0].lower() if args else "report"
     try:
         if sub in ("start", "stop"):
-            if len(args) < 3 or args[2].lower() not in STAGES:
-                print(f"Usage: gate time {sub} <api#N|web#N|owner/repo#N> <{'|'.join(STAGES)}>"
-                      + (" [--result <word>]" if sub == "stop" else ""))
+            if len(args) < 2:
+                print(f"Usage: gate time {sub} <api#N|web#N|owner/repo#N> <{'|'.join(AGENT_STAGES)}> | "
+                      f"gate time {sub} MAN-NN" + (" [--result pass|fail|<word>]" if sub == "stop" else ""))
                 sys.exit(2)
-            task, stage = norm_task(args[1]), args[2].lower()
+            task = norm_task(args[1])
+            if is_manual(task):
+                stage = "manual"
+            elif len(args) < 3 or args[2].lower() not in AGENT_STAGES:
+                print(f"Usage: gate time {sub} <task> <{'|'.join(AGENT_STAGES)}>")
+                sys.exit(2)
+            else:
+                stage = args[2].lower()
             was_open = any(x["stage"] == stage and x["state"] == "running"
                            for x in segments(read_log()).get(task, []))
             ev = {"ts": iso(now_dt()), "event": sub, "task": task, "stage": stage}
-            if sub == "stop" and "--result" in args:
-                i = args.index("--result")
-                if i + 1 < len(args):
-                    ev["result"] = args[i + 1].lower()
-            append(ev)
-            seg = segments(read_log()).get(task, [])
+            result = _opt(args, "--result")
+            if sub == "stop" and result:
+                ev["result"] = result
             if sub == "stop" and not was_open:
-                print(f"TIME: no running {stage} on {task} (already stopped); nothing to add")
-            elif sub == "stop":
-                last = next((s for s in reversed(seg) if s["stage"] == stage and s["state"] == "closed"), None)
-                print(f"TIME: {stage} on {task} stopped" + (f" ({fmt(last['hours'])})" if last else ""))
-            elif was_open:
+                print(f"TIME: no running {stage} on {task} (already stopped); nothing to add"
+                      + (". To record the result and the time, use `time log`." if stage == "manual" else ""))
+                return
+            if sub == "start" and was_open:
                 print(f"TIME: {stage} on {task} already running; keeping the earlier start")
+                return
+            append(ev)
+            if sub == "stop":
+                seg = segments(read_log()).get(task, [])
+                last = next((x for x in reversed(seg) if x["stage"] == stage and x["state"] == "closed"), None)
+                print(f"TIME: {stage} on {task} stopped" + (f" ({fmt(last['hours'])})" if last else "")
+                      + (f", result {result}" if result else ""))
             else:
                 print(f"TIME: {stage} on {task} started")
+        elif sub == "log":
+            if len(args) < 3 or parse_hours(args[2]) is None:
+                print("Usage: gate time log <task> <hours, e.g. 45m or 1.5h> [--result pass|fail] [--stage dev|qa|fix]")
+                sys.exit(2)
+            task, hours = norm_task(args[1]), parse_hours(args[2])
+            stage = "manual" if is_manual(task) else (_opt(args, "--stage") or "dev")
+            if stage not in STAGES:
+                raise ValueError(f"stage must be one of {', '.join(STAGES)}")
+            ev = {"ts": iso(now_dt()), "event": "log", "task": task, "stage": stage, "hours": hours}
+            if _opt(args, "--result"):
+                ev["result"] = _opt(args, "--result")
+            append(ev)
+            print(f"TIME: logged {fmt(hours)} of {stage} on {task}" + (f", result {ev['result']}" if "result" in ev else ""))
+        elif sub == "estimate":
+            if len(args) < 3 or parse_hours(args[2]) is None:
+                print("Usage: gate time estimate MAN-NN <hours> [note]")
+                sys.exit(2)
+            task = norm_task(args[1])
+            if not is_manual(task):
+                raise ValueError("factory task estimates live in the issue body (**Estimate:** line); "
+                                 "`time estimate` is for manual QA checks")
+            hours = parse_hours(args[2])
+            append({"ts": iso(now_dt()), "event": "estimate", "task": task, "hours": hours,
+                    "note": " ".join(a for a in args[3:])[:300]})
+            print(f"TIME: estimate for {task}: {fmt(hours)} (your time)")
+        elif sub == "manual":
+            cmd_manual(args[1] if len(args) > 1 else "open")
         elif sub == "human":
             if len(args) < 3 or parse_hours(args[2]) is None:
                 print("Usage: gate time human <task> <hours, e.g. 6h or 90m> [note]")

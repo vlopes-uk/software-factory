@@ -18,29 +18,28 @@ Stop it with `docker compose down`. The dashboard's own settings survive in the 
 ## Where the data comes from
 
 1. `/factory:plan` puts estimates in each task issue: `**Estimate:** agent 2h · human 6h`.
-2. `/factory:build` (and the developer and QA agents themselves) record when each stage starts and stops in the product repo's `.factory/timelog.jsonl`. QA also records its after-the-fact human-dev estimate.
+2. `/factory:build` (and the developer and QA agents themselves) record when each stage starts and stops in the product repo's `.factory/timelog.jsonl`. QA also records its after-the-fact human-dev estimate. Your manual checks are timed with `/factory:qa manual`.
 3. `gate time export` combines both into one SQLite file, `~/.factory/metrics/factory.db`. It runs automatically at the end of `/factory:status` and `/factory:build`. All your products share the file; pick one at the top of the dashboard.
 
 If your metrics live elsewhere, set `FACTORY_METRICS_DIR` for both the factory (environment variable) and Grafana (copy `.env.example` to `.env`).
 
 The dashboard only shows data after the first export. If a panel says "no data" or the datasource can't open the file, run `/factory:status` in the product repo once.
 
-## Panels
+## What's on it
 
-| Section | Panel | Answers |
-| --- | --- | --- |
-| Where we are | Progress | Tasks done, estimate, spent, remaining by estimate, calibrated forecast, human-dev estimate |
-| | Burn-down | Remaining estimate vs cumulative time spent, per day |
-| | Estimate vs actual by milestone / story | Where the plan is holding or slipping |
-| | Open tasks | What's left, with forecasts and re-estimates |
-| Deviations | Done tasks | Estimate vs actual per task, worst first, split into dev / QA / fix rounds |
-| | Where the agent time goes | Dev vs QA vs fix rounds |
-| | Deviation by category | be/fe, feature/ops/sync/skeleton/bug, S/M |
-| Learning | Estimation accuracy over time | Each finished task's actual/estimate and the rolling median; it should move towards 1.0 |
-| | Calibration used by /factory:plan | The factors the planner applies to new estimates |
-| | Human-dev: plan vs QA | The plan's human-dev estimate vs QA's estimate after seeing the PR |
+All figures are in hours. Agent hours and your hours are never added together.
 
-The **Scope** picker filters to the baseline (`main`) or one change request.
+| Panel | Shows |
+| --- | --- |
+| Tasks | items done out of the total |
+| Agent hours | the factory's developers, QA and fix rounds: estimate, spent, remaining, forecast |
+| Your hours (manual QA) | your manual checks: estimate, spent, remaining, forecast |
+| Tasks table | every factory task and manual check: type, version, story, status, estimate, spent, remaining, forecast, deviation and re-estimates. Most urgent first (failed, blocked, in progress, ...) |
+| Burn-down | per day: agent and your hours remaining (solid) and spent (dashed) |
+
+**Filters** at the top: **Version** (each change request's version; `baseline` for the original cycle), **Status** and **Type** (Backend, Frontend, Bug, Manual QA). They apply to every panel. Each table column can also be filtered with the funnel on its header.
+
+The forecast is the remaining work corrected with this product's history (how much items in the same category usually overrun).
 
 ## Changing the dashboard
 

@@ -164,11 +164,23 @@ Preview without changing anything: `bash <plugin>/scripts/gate tasks sync`.
 
 The build's final report also shows estimate → actual per task.
 
-**Learning.** `gate time calibration` computes, per product, how actual agent time compares with the estimate (median actual/estimate) per category: `be|fe` / `feature|ops|sync|skeleton|bug` / `S|M`. A category needs 3 finished tasks before it is used; until then the broader category applies, then `all`, then no correction. `/factory:plan` and `/factory:bug` read these factors plus recent similar tasks before estimating, so new estimates build on what really happened. Forecasts use the same factors. Re-estimates never overwrite the original line: review mode adds `**Revised estimate:** … (<date>: <reason>)`, so scope changes and estimating errors can be told apart.
+**Your manual QA checks.** The manual checks in the test plans (MAN-NN: real phones, screen readers, reading the translations) are your time, and they're tracked the same way, kept apart from agent hours. `/factory:qa plan` gives each one a "Your hours" estimate. You time them yourself:
 
-**Dashboard.** `gate time export` (run automatically by `/factory:status` and `/factory:build`) writes `~/.factory/metrics/factory.db`. `dashboard/` in this repo holds a ready-made Grafana for it: `cd dashboard && docker compose up -d`, then http://localhost:3000. It has burn-down, estimate vs actual per milestone and story, deviations, where the time goes, and the accuracy trend. See `dashboard/README.md`.
+```text
+/factory:qa manual                    # your checks: to do / in progress / failed / passed, estimate, time left
+/factory:qa manual start MAN-21       # timer on
+/factory:qa manual done MAN-21 pass   # timer off (or: fail <what went wrong>)
+/factory:qa manual log MAN-22 45m     # if you forgot the timer
+/factory:qa manual estimate MAN-23 1h # add or change an estimate
+```
 
-Commands: `gate time report [all|main|CR-NNN]`, `gate time calibration`, `gate time unlogged` (closed tasks with no recorded time), `gate time export`.
+A failed check counts its full estimate again until it passes. MAN ids repeat across change requests; write `CR-009/MAN-21` when the gate says an id is ambiguous. Checks are tracked for open change requests (and the baseline before the first CR merges), or as soon as they have an estimate or time recorded.
+
+**Learning.** `gate time calibration` computes, per product, how actual agent time compares with the estimate (median actual/estimate) per category: `be|fe` / `feature|ops|sync|skeleton|bug` / `S|M`. Your manual checks have their own `manual` category. A category needs 3 finished items before it is used; until then the broader category applies, then `all`, then no correction. `/factory:plan` and `/factory:bug` read these factors plus recent similar tasks before estimating, so new estimates build on what really happened. Forecasts use the same factors. Re-estimates never overwrite the original line: review mode adds `**Revised estimate:** … (<date>: <reason>)`, so scope changes and estimating errors can be told apart.
+
+**Dashboard.** `gate time export` (run automatically by `/factory:status` and `/factory:build`) writes `~/.factory/metrics/factory.db`. `dashboard/` in this repo holds a ready-made Grafana for it: `cd dashboard && docker compose up -d`, then http://localhost:3000. It shows your hours and agent hours (estimate, spent, remaining, forecast), one Tasks table with factory tasks and manual checks that you can filter by version, status and type, and a burn-down. A change request's version comes from its `Version` field (or "Version X.Y.Z" in its title). See `dashboard/README.md`.
+
+Commands: `gate time report [all|main|CR-NNN]`, `gate time manual`, `gate time calibration`, `gate time unlogged` (closed tasks with no recorded time), `gate time export`.
 
 ## DevOps (GitHub + Azure), kept lean
 

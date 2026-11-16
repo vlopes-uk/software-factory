@@ -33,8 +33,9 @@ If the build phase is `ready`, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" ta
 
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time report all --export`
 
-Hours are **agent hours** (the factory's developers, QA and fix rounds, measured automatically by `/factory:build`); the human-dev figures are the plan's estimate of what a human developer would need, compared with QA's estimate after each task. Summarise in at most 6 lines:
+Two kinds of hours, never added together: **agent hours** (the factory's developers, QA and fix rounds, measured automatically by `/factory:build`) and **your hours** (the manual QA checks, timed with `/factory:qa manual`). The human-dev figures are the plan's estimate of what a human developer would need, compared with QA's estimate after each task. Summarise in at most 7 lines:
 
+- **Your manual QA:** checks passed out of the total, your hours spent and still needed, and any failed or in-progress check. If there are open checks, mention `/factory:qa manual`.
 - **Where we are:** tasks done, hours spent against the estimate, and the hours still needed: the estimate-based remainder **and** the calibrated forecast. Lead with the forecast, and say what it is based on (the calibration factor and sample count, or "uncalibrated" when there is too little history).
 - **Deviations:** the 1–3 biggest overruns from the report, and which stage the extra time went to (dev, QA, or fix rounds). Point out a pattern if one category keeps running over (for example, `fe` tasks or fix rounds).
 - **Open tasks already over their estimate**, if any.

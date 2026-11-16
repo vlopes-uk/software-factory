@@ -23,8 +23,15 @@
 | Accessibility | axe + keyboard pass | 0 serious violations |
 | Security | dependency audit, authz tests | 0 high |
 
-## 4. Ambiguous or untestable criteria
+## 4. Manual checks
+Only what can't be automated (real devices, screen readers, the product owner's review of text or artwork). The product owner runs them and times them with `/factory:qa manual`.
+
+| ID | Check | Pass when | Your hours |
+| --- | --- | --- | --- |
+| MAN-01 | | | 0.5 |
+
+## 5. Ambiguous or untestable criteria
 - <AC>: <why> → proposed rewording (send to the PO)
 
-## 5. Exit criteria for a release
-- All Must ACs pass; no open ❌ in QA reviews; NFR thresholds met.
+## 6. Exit criteria for a release
+- All Must ACs pass; no open ❌ in QA reviews; NFR thresholds met; every manual check passed.

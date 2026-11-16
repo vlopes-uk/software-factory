@@ -108,22 +108,22 @@ def test_flow_report_calibration_export():
             code, out = t(tmp, env, when, verb, task, stage)
             assert code == 0 and "TIME:" in out, out
         assert t(tmp, env, "2026-11-05T12:01:00Z", "stop", "web#1", "dev")[1].startswith("TIME: no running")
-        assert "7.0h" in t(tmp, env, "2026-11-02T13:31:00Z", "human", "api#1", "7h", "bigger")[1]
+        assert ": 7h" in t(tmp, env, "2026-11-02T13:31:00Z", "human", "api#1", "7h", "bigger")[1]
 
         code, out = t(tmp, env, "2026-11-05T14:00:00Z", "report")
         assert code == 0
         assert "Tasks: 4/5 done" in out
         assert "+50%" in out                       # api#1: 2h -> 3h
-        assert "1 closed task(s) have no recorded agent time" in out
-        assert "Re-estimates moved the plan from 8.0h to 9.0h" in out
+        assert "1 closed task(s) have no recorded time" in out
+        assert "Re-estimates moved the agent plan from 8h to 9h" in out
         # web#1: revised 4h, factor x1.5 (3 samples, 'all') -> expected 6h, spent 2h -> forecast 4h
-        assert "forecast 4.0h" in out, out
+        assert "forecast 4h" in out, out
 
         code, out = t(tmp, env, "2026-11-05T14:00:00Z", "calibration")
         assert "be/feature/S" in out and "x1.50" in out and "T-01" in out
 
         code, out = t(tmp, env, "2026-11-05T14:00:00Z", "export")
-        assert "EXPORT: 5 task(s) of 'p'" in out
+        assert "EXPORT: 5 item(s) of 'p'" in out
         db = sqlite3.connect(str(Path(tmp) / "metrics" / "factory.db"))
         rows = dict(db.execute("SELECT tid, milestone FROM tasks").fetchall())
         assert rows["T-01"] == "M0" and rows["T-03"] == "M1"           # column wins; list as fallback
@@ -140,6 +140,44 @@ def test_flow_report_calibration_export():
         db = sqlite3.connect(str(Path(tmp) / "metrics" / "factory.db"))
         assert db.execute("SELECT count(*) FROM tasks WHERE product='p'").fetchone()[0] == 5
         assert db.execute("SELECT count(*) FROM tasks WHERE product='other'").fetchone()[0] == 1
+
+
+def test_manual_checks():
+    with tempfile.TemporaryDirectory() as tmp:
+        env = setup_repo(tmp)
+        tp = Path(tmp) / "docs/factory/05-qa/TEST-PLAN.md"
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tp.write_text("## 5. Manual checks\n| ID | Check | Pass when | Your hours |\n| --- | --- | --- | --- |\n"
+                      "| MAN-01 | Screen reader pass | ok | 1 |\n| MAN-02 | Real Safari | ok | 0.5 |\n\n"
+                      "### CR-002 manual checks\n| ID | Check | When |\n| --- | --- | --- |\n| MAN-01 | Phone keyboard | now |\n")
+        cr = Path(tmp) / "docs/factory/changes/CR-002-version-1-4/01-requirements/REQUIREMENTS.md"
+        cr.parent.mkdir(parents=True, exist_ok=True)
+        cr.write_text("| Field | Value |\n| --- | --- |\n| Version | 1.4 |\n")
+        state = json.loads((Path(tmp) / ".factory/state.json").read_text())
+        state["changes"] = {"CR-002": {"title": "Something", "status": "open", "slug": "version-1-4"}}
+        (Path(tmp) / ".factory/state.json").write_text(json.dumps(state))
+        # main checks are tracked (no CR merged yet), CR-002 too (open)
+        code, out = t(tmp, env, "2026-11-05T09:00:00Z", "manual")
+        assert "MAN-01" in out and "CR-002/MAN-01" in out and "0/3 passed" in out, out
+        assert "TIME UNAVAILABLE" in t(tmp, env, "2026-11-05T09:00:00Z", "start", "MAN-01")[1]   # ambiguous
+        assert "started" in t(tmp, env, "2026-11-05T09:00:00Z", "start", "main/MAN-01")[1]
+        assert "stopped (1.5h), result pass" in t(tmp, env, "2026-11-05T10:30:00Z", "stop", "main/MAN-01",
+                                                   "--result", "pass")[1]
+        t(tmp, env, "2026-11-05T11:00:00Z", "log", "MAN-02", "45m", "--result", "fail")
+        t(tmp, env, "2026-11-05T11:00:00Z", "estimate", "CR-002/MAN-01", "2h")
+        code, out = t(tmp, env, "2026-11-05T12:00:00Z", "manual", "all")
+        assert "1/3 passed" in out and "Failed" in out and "Passed" in out, out
+        assert "estimated 3.5h" in out, out        # 1 + 0.5 + 2
+        assert "remaining 2.5h" in out, out        # failed MAN-02 runs again in full (0.5) + 2
+        t(tmp, env, "2026-11-05T12:00:00Z", "report", "--export")
+        db = sqlite3.connect(str(Path(tmp) / "metrics" / "factory.db"))
+        rows = {r[0]: r[1:] for r in db.execute(
+            "SELECT ref, who, type, version, status, actual_h FROM tasks WHERE who='you'")}
+        assert rows["MAN-01"] == ("you", "Manual QA", "baseline", "Passed", 1.5)
+        assert rows["CR-002/MAN-01"][2] == "1.4.0"
+        your = db.execute("SELECT SUM(your_est_h), SUM(your_spent_h) FROM summary WHERE scope != 'all'").fetchone()
+        assert your == (3.5, 2.25), your
+        assert db.execute("SELECT agent_est_h FROM summary WHERE scope='all'").fetchone()[0] == 9.0
 
 
 def test_errors_never_crash():
