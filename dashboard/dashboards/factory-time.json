@@ -10,7 +10,7 @@
   "editable": false,
   "refresh": "5m",
   "time": {
-    "from": "now-60d",
+    "from": "now-14d",
     "to": "now"
   },
   "templating": {
@@ -476,7 +476,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Burn-down: hours remaining vs spent",
-      "description": "Per day, for the selected versions. Remaining = estimates of open items minus time already spent on them.",
+      "description": "For the selected versions, from when their work was planned. Remaining = estimates of open items minus time already spent on them. Versions with no estimates have no line. Widen the time range (top right) for older versions.",
       "datasource": {
         "type": "frser-sqlite-datasource",
         "uid": "factory-sqlite"
@@ -509,7 +509,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 0,
-            "showPoints": "auto"
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true
           }
         },
         "overrides": [

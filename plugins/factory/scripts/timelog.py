@@ -772,13 +772,21 @@ def versions() -> dict:
 
 
 def burndown(rows: list[dict], now: _dt.datetime) -> list[tuple]:
-    starts = [r["created"] for r in rows if r["created"]] + [r["first_start"] for r in rows if r["first_start"]]
-    if not starts:
+    """Remaining and spent hours over time, from when the estimated work was planned until now:
+    the planning moment, then the end of each day, then now. Scopes with no estimates have no line."""
+    est = [r for r in rows if r["cur_agent"] is not None]
+    if not est:
         return []
-    day = min(starts).replace(hour=0, minute=0, second=0, microsecond=0)
+    starts = [r["created"] for r in est if r["created"]] + [r["first_start"] for r in rows if r["first_start"]]
+    first = min(starts) if starts else now
+    times, day = [first], first.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+    while day < now:
+        times.append(day)
+        day += _dt.timedelta(days=1)
+    if now > first:
+        times.append(now)
     points = []
-    while day <= now:
-        end = min(day + _dt.timedelta(days=1), now)
+    for end in times:
         vals = []
         for who in ("agent", "you"):
             rs = [r for r in rows if r["who"] == who]
@@ -790,7 +798,6 @@ def burndown(rows: list[dict], now: _dt.datetime) -> list[tuple]:
             vals += [round(rem, 3), round(spent, 3)]
         done = sum(1 for r in rows if r["closed"] and r["closed"] <= end)
         points.append((epoch(end), *vals, done))
-        day += _dt.timedelta(days=1)
     return points
 
 
