@@ -1,0 +1,719 @@
+{
+  "uid": "factory-time",
+  "title": "Software factory: estimates & time",
+  "tags": [
+    "factory"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "5m",
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "product",
+        "label": "Product",
+        "type": "query",
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "factory-sqlite"
+        },
+        "query": {
+          "queryText": "SELECT DISTINCT product FROM tasks ORDER BY product",
+          "rawQueryText": "SELECT DISTINCT product FROM tasks ORDER BY product"
+        },
+        "definition": "SELECT DISTINCT product FROM tasks ORDER BY product",
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "hide": 0
+      },
+      {
+        "name": "scope",
+        "label": "Scope",
+        "type": "query",
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "factory-sqlite"
+        },
+        "query": {
+          "queryText": "SELECT 'all' AS scope UNION ALL SELECT * FROM (SELECT DISTINCT scope FROM tasks WHERE product = '$product' ORDER BY scope)",
+          "rawQueryText": "SELECT 'all' AS scope UNION ALL SELECT * FROM (SELECT DISTINCT scope FROM tasks WHERE product = '$product' ORDER BY scope)"
+        },
+        "definition": "SELECT 'all' AS scope UNION ALL SELECT * FROM (SELECT DISTINCT scope FROM tasks WHERE product = '$product' ORDER BY scope)",
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "hide": 0,
+        "current": {
+          "text": "all",
+          "value": "all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Where we are",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Progress (agent hours)",
+      "description": "Agent hours: the factory's dev + QA + fix rounds, measured by /factory:build. The forecast applies this product's calibration (how much tasks typically overrun).",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT done || ' / ' || tasks AS \"Tasks done\", est_h AS \"Estimate\", spent_h AS \"Spent\",\n  remaining_h AS \"Remaining (by estimate)\", forecast_h AS \"Forecast remaining (calibrated)\",\n  est_human_h AS \"Human-dev estimate\", unestimated AS \"Open tasks without estimate\"\nFROM summary WHERE product = '$product' AND scope = '$scope'",
+          "rawQueryText": "SELECT done || ' / ' || tasks AS \"Tasks done\", est_h AS \"Estimate\", spent_h AS \"Spent\",\n  remaining_h AS \"Remaining (by estimate)\", forecast_h AS \"Forecast remaining (calibrated)\",\n  est_human_h AS \"Human-dev estimate\", unestimated AS \"Open tasks without estimate\"\nFROM summary WHERE product = '$product' AND scope = '$scope'"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tasks done"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open tasks without estimate"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Burn-down: remaining estimate vs time spent",
+      "description": "Daily. Remaining = estimates of open tasks minus time already spent on them.",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 14,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT time, remaining_est_h AS \"Remaining (estimate)\", spent_h AS \"Spent (cumulative)\", done_tasks AS \"Tasks done\"\nFROM burndown WHERE product = '$product' AND scope = '$scope' ORDER BY time",
+          "rawQueryText": "SELECT time, remaining_est_h AS \"Remaining (estimate)\", spent_h AS \"Spent (cumulative)\", done_tasks AS \"Tasks done\"\nFROM burndown WHERE product = '$product' AND scope = '$scope' ORDER BY time",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tasks done"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.drawStyle",
+                "value": "bars"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 30
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "Estimate vs actual by milestone",
+      "description": "",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 6,
+        "w": 10,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COALESCE(milestone, '(none)') AS Milestone, ROUND(SUM(cur_agent_h), 1) AS \"Estimate\",\n  ROUND(SUM(actual_agent_h), 1) AS \"Spent\", ROUND(SUM(forecast_h), 1) AS \"Forecast remaining\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT COALESCE(milestone, '(none)') AS Milestone, ROUND(SUM(cur_agent_h), 1) AS \"Estimate\",\n  ROUND(SUM(actual_agent_h), 1) AS \"Spent\", ROUND(SUM(forecast_h), 1) AS \"Forecast remaining\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "options": {
+        "xField": "Milestone",
+        "orientation": "auto",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "showValue": "auto",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Estimate vs actual by story",
+      "description": "",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COALESCE(story, '(no story)') AS Story, ROUND(SUM(cur_agent_h), 1) AS \"Estimate\",\n  ROUND(SUM(actual_agent_h), 1) AS \"Spent\", ROUND(SUM(forecast_h), 1) AS \"Forecast remaining\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT COALESCE(story, '(no story)') AS Story, ROUND(SUM(cur_agent_h), 1) AS \"Estimate\",\n  ROUND(SUM(actual_agent_h), 1) AS \"Spent\", ROUND(SUM(forecast_h), 1) AS \"Forecast remaining\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "options": {
+        "xField": "Story",
+        "orientation": "auto",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "showValue": "auto",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Open tasks",
+      "description": "",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT ref AS \"Task\", tid AS \"ID\", title AS \"Title\", status AS \"Status\", category AS \"Category\",\n  cur_agent_h AS \"Estimate h\", actual_agent_h AS \"Spent h\", forecast_h AS \"Forecast remaining h\",\n  CASE WHEN rev_agent_h IS NOT NULL THEN 'revised from ' || est_agent_h || 'h' ELSE '' END AS \"Re-estimated\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND state != 'closed' ORDER BY forecast_h DESC",
+          "rawQueryText": "SELECT ref AS \"Task\", tid AS \"ID\", title AS \"Title\", status AS \"Status\", category AS \"Category\",\n  cur_agent_h AS \"Estimate h\", actual_agent_h AS \"Spent h\", forecast_h AS \"Forecast remaining h\",\n  CASE WHEN rev_agent_h IS NOT NULL THEN 'revised from ' || est_agent_h || 'h' ELSE '' END AS \"Re-estimated\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND state != 'closed' ORDER BY forecast_h DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Deviations",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Done tasks: estimate vs actual (biggest misses first)",
+      "description": "Deviation = actual agent time vs the estimate in force (revised if re-estimated). Human after (QA) = the QA reviewer's estimate, after seeing the PR, of what a human developer would have needed.",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT ref AS \"Task\", tid AS \"ID\", title AS \"Title\", category AS \"Category\",\n  cur_agent_h AS \"Estimate h\", actual_agent_h AS \"Actual h\", deviation_pct AS \"Deviation %\",\n  dev_h AS \"Dev h\", qa_h AS \"QA h\", fix_h AS \"Fix h\", fix_rounds AS \"Fix rounds\",\n  cur_human_h AS \"Human plan h\", posthoc_human_h AS \"Human after (QA) h\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND state = 'closed' AND tracked = 1 ORDER BY ABS(deviation_h) DESC",
+          "rawQueryText": "SELECT ref AS \"Task\", tid AS \"ID\", title AS \"Title\", category AS \"Category\",\n  cur_agent_h AS \"Estimate h\", actual_agent_h AS \"Actual h\", deviation_pct AS \"Deviation %\",\n  dev_h AS \"Dev h\", qa_h AS \"QA h\", fix_h AS \"Fix h\", fix_rounds AS \"Fix rounds\",\n  cur_human_h AS \"Human plan h\", posthoc_human_h AS \"Human after (QA) h\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND state = 'closed' AND tracked = 1 ORDER BY ABS(deviation_h) DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Deviation %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "blue",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": -20
+                    },
+                    {
+                      "color": "orange",
+                      "value": 20
+                    },
+                    {
+                      "color": "red",
+                      "value": 50
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 9,
+      "type": "barchart",
+      "title": "Where the agent time goes",
+      "description": "dev = developer agents, qa = QA reviewer, fix = fix rounds after QA requested changes.",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT s.stage AS \"Stage\", ROUND(SUM(s.hours), 2) AS \"Hours\"\nFROM stages s JOIN tasks t ON t.product = s.product AND t.ref = s.ref\nWHERE s.product = '$product' AND ('$scope' = 'all' OR t.scope = '$scope') GROUP BY s.stage ORDER BY 2 DESC",
+          "rawQueryText": "SELECT s.stage AS \"Stage\", ROUND(SUM(s.hours), 2) AS \"Hours\"\nFROM stages s JOIN tasks t ON t.product = s.product AND t.ref = s.ref\nWHERE s.product = '$product' AND ('$scope' = 'all' OR t.scope = '$scope') GROUP BY s.stage ORDER BY 2 DESC"
+        }
+      ],
+      "options": {
+        "xField": "Stage",
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Deviation by category (total actual vs estimate, done tasks)",
+      "description": "",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 42,
+        "w": 16,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT category AS \"Category\", ROUND(SUM(cur_agent_h), 1) AS \"Estimate\", ROUND(SUM(actual_agent_h), 1) AS \"Actual\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND state = 'closed' AND tracked = 1 GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT category AS \"Category\", ROUND(SUM(cur_agent_h), 1) AS \"Estimate\", ROUND(SUM(actual_agent_h), 1) AS \"Actual\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND state = 'closed' AND tracked = 1 GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "options": {
+        "xField": "Category",
+        "orientation": "auto",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Learning",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Estimation accuracy over time (actual / estimate; 1.0 = perfect)",
+      "description": "Each point is a finished task. The rolling median should move towards 1.0 as /factory:plan learns from this product's history.",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 14,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT time, ratio AS \"Task\", rolling_median AS \"Rolling median (last 10 tasks)\"\nFROM calibration_history WHERE product = '$product' ORDER BY time",
+          "rawQueryText": "SELECT time, ratio AS \"Task\", rolling_median AS \"Rolling median (last 10 tasks)\"\nFROM calibration_history WHERE product = '$product' ORDER BY time",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "showPoints": "always",
+            "pointSize": 6,
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              },
+              {
+                "color": "transparent",
+                "value": 1.2
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Task"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Calibration used by /factory:plan",
+      "description": "'human' compares QA's after-the-fact human-dev estimate with the plan's human-dev estimate.",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 51,
+        "w": 10,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT category AS \"Category\", samples AS \"Samples\", factor AS \"Typical actual/estimate\", p80 AS \"80% within\",\n  CASE WHEN samples >= 3 THEN 'used' ELSE 'too few' END AS \"Status\"\nFROM calibration WHERE product = '$product' ORDER BY CASE category WHEN 'all' THEN 0 WHEN 'human' THEN 1 ELSE 2 END, samples DESC",
+          "rawQueryText": "SELECT category AS \"Category\", samples AS \"Samples\", factor AS \"Typical actual/estimate\", p80 AS \"80% within\",\n  CASE WHEN samples >= 3 THEN 'used' ELSE 'too few' END AS \"Status\"\nFROM calibration WHERE product = '$product' ORDER BY CASE category WHEN 'all' THEN 0 WHEN 'human' THEN 1 ELSE 2 END, samples DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 14,
+      "type": "barchart",
+      "title": "Human-dev estimate: plan vs QA after the work",
+      "description": "",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "factory-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "factory-sqlite"
+          },
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT tid AS \"Task\", cur_human_h AS \"Plan\", posthoc_human_h AS \"QA after the work\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND posthoc_human_h IS NOT NULL ORDER BY closed_time",
+          "rawQueryText": "SELECT tid AS \"Task\", cur_human_h AS \"Plan\", posthoc_human_h AS \"QA after the work\"\nFROM tasks WHERE product = '$product' AND ('$scope' = 'all' OR scope = '$scope') AND posthoc_human_h IS NOT NULL ORDER BY closed_time"
+        }
+      ],
+      "options": {
+        "xField": "Task",
+        "orientation": "auto",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "description": "Agent hours estimated by /factory:plan vs measured by /factory:build. Data: `gate time export` (runs with /factory:status and /factory:build)."
+}

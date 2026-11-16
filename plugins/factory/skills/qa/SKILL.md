@@ -68,4 +68,6 @@ Resolve `$1` with the config: `api#31` means a PR in `repos.api.github`, and `we
 
 > Review pull request `<owner/repo>#<n>`. Local clone: `<absolute clone path>`. Product repo with the specs: `<absolute path of the current directory>`. Stack profile: `${CLAUDE_PLUGIN_ROOT}/stack/dotnet-react-azure.md`. Check it against its linked task issue, the acceptance criteria, the binding contract, and TEST-PLAN.md, and post your review on the PR. If the issue says `Change request: CR-NNN` and that CR is open, the binding contract and test plan are the ones in `docs/factory/changes/CR-NNN-*/`.
 
+Around the dispatch, record the QA time on the **task** (`Closes #N` in the PR body), not the PR: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time start <repo-key>#<task n> qa` before, and `… time stop <repo-key>#<task n> qa --result <passed|changes>` after (duplicates with the reviewer's own records are ignored).
+
 When it returns, give the user its verdict and the key findings in under 10 lines. Remind them that **merging is their gate**. If changes were requested, suggest `/factory:build <repo-key>#<issue> fix`.

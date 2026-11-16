@@ -65,6 +65,9 @@ Follow the **autonomy settings above exactly**. They're the human's decision. Yo
 
 ## The chain (per task)
 
+**Time tracking (always, whatever the autonomy).** Wrap every stage with the gate, using the task's issue ref (`<owner/repo>#<issue>`, never the PR number):
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time start <task> <dev|qa|fix>` right before you dispatch the agent, and `… time stop <task> <dev|qa|fix> --result <pr|blocked|failed|passed|changes>` as soon as it returns. The agents record their own start and stop too; duplicates are ignored. Stop a stage even when the agent failed or was blocked, so no timer is left running.
+
 Run this for each started task. Separate tasks' chains can run in parallel, up to `max_parallel` developers at once.
 
 1. **Develop.** Dispatch the developer as described under *Dispatch* below. Keep the returned PR number. If the developer reports `factory:blocked` or no PR, the chain ends with **needs you**.
@@ -100,9 +103,11 @@ Run this for each started task. Separate tasks' chains can run in parallel, up t
 
 Finish with one table, one row per task started in this run:
 
-| Task | PR | Result | Rounds | Next step for you |
-| --- | --- | --- | --- | --- |
-| api#12 T-02 | #31 | ✅ Ready to merge | QA ✓ after 1 fix | Review & merge on GitHub |
+| Task | PR | Result | Rounds | Agent time (est → actual) | Next step for you |
+| --- | --- | --- | --- | --- | --- |
+| api#12 T-02 | #31 | ✅ Ready to merge | QA ✓ after 1 fix | 2h → 2.6h | Review & merge on GitHub |
+
+Take the times from `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time report all --export`, run once after the last chain ends (it also refreshes the dashboard data). Then commit the time log, and only that file, in the product repo: `git -C <product repo> add .factory/timelog.jsonl` and `git -C <product repo> commit -m "factory: time log" -- .factory/timelog.jsonl` (skip it if git says there is nothing to commit; never push). Flag any task that went more than 50% over its estimate in one line.
 
 Then add one line: "Merging is yours. After you merge, `/factory:status` closes finished stories and epics, and `/factory:build next` continues."
 

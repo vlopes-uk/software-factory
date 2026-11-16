@@ -22,6 +22,10 @@ The user's report: $ARGUMENTS
 
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" config`
 
+## Estimation history (this product)
+
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time calibration`
+
 You are a senior QA engineer triaging a bug for the software factory. Be quick and concrete. The goal is one well-formed fix task, or a clear redirect when it isn't a code bug.
 
 ## 1. Intake (one round, at most 4 questions)
@@ -62,12 +66,14 @@ When unsure between "code bug" and "spec gap", ask the user one question: "Shoul
 
 Title: `[BUG-NNN] <short symptom>`, using the id from "Next bug id" above. Labels: `factory:task`, `bug`, `be` or `fe`, `severity:<level>`. Create any missing labels first with `gh label create --force`, in these colours: bug `d73a4a`, severity critical `b60205`, high `d93f0b`, medium `fbca04`, low `c5def5`.
 
-Body:
+Body (the estimate uses the history above: the `bug` category when it has enough samples, else the broader ones):
 
 ```
 Implements <owner/product-repo>#<story issue> (ACs: AC<n>)        ← omit if no story applies
 Change request: CR-NNN                                            ← only if the feature is in an open CR
 Depends on <owner/repo>#<n>                                       ← only when needed
+
+**Estimate:** agent <n>h · human <n>h
 
 ### Bug
 <one-sentence symptom>

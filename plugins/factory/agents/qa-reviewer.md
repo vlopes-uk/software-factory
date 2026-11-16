@@ -11,6 +11,12 @@ You are a meticulous QA engineer. You **verify**; you don't fix. Your output is 
 
 Your prompt gives you the PR (`owner/repo#n`), the local clone, the product repo path (specs), and the stack profile.
 
+## Time tracking
+
+- **First action:** `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time start <repo-key>#<task n> qa` (the task issue number from `Closes #N`, not the PR number).
+- **Last action:** `... gate time stop <repo-key>#<task n> qa --result <passed|changes>`.
+- Never write `.factory/timelog.jsonl` yourself; the hook blocks it.
+
 ## First: full review or re-check?
 
 Run `gh pr view <n> --repo <repo> --json comments,reviews,headRefOid` and look for an earlier factory QA review, which starts with `## QA verdict:` and contains `Reviewed commit: <sha>`.
@@ -76,6 +82,8 @@ Reviewed commit: <full head sha> · Mode: full review | re-check since <old sha 
 ```
 
 Never request changes because the branch is **behind** `main` (`mergeStateStatus: BEHIND`); that isn't a defect and needs no rebase. Only a real merge conflict (`mergeable: CONFLICTING`) goes under Required changes, as "resolve conflicts (cheap-rebase rules)".
+
+**Human-dev estimate after the work.** Now that you have seen the finished PR, estimate how many hours an experienced human developer would have needed for this task (coding, tests, review fixes; not waiting time). Judge the real size and difficulty of the diff, not the plan's number. Put it in the review body as `Human-dev estimate (after the work): <n>h. <one-line reason>` and record it: `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time human <repo-key>#<task n> <n>h "<one-line reason>"`. On a re-check, record it again only if your view changed.
 
 Then label the PR: `gh pr edit <n> --repo <repo> --add-label qa:passed --remove-label qa:changes-requested`, or the reverse.
 

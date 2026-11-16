@@ -1,0 +1,26 @@
+# Software factory dashboard: Grafana reading the factory's time metrics (read-only).
+#   docker compose up -d      then open http://localhost:3000
+# The data comes from `gate time export` (run automatically by /factory:status and /factory:build),
+# which writes $FACTORY_METRICS_DIR/factory.db (default ~/.factory/metrics/factory.db).
+# One shared database for all your products; pick the product at the top of the dashboard.
+services:
+  grafana:
+    image: grafana/grafana:12.2.0
+    container_name: factory-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"          # local only
+    environment:
+      GF_PLUGINS_PREINSTALL: frser-sqlite-datasource
+      GF_AUTH_ANONYMOUS_ENABLED: "true"  # open without logging in (local only, read-only role)
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/factory-time.json
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ${FACTORY_METRICS_DIR:-~/.factory/metrics}:/var/lib/factory
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+volumes:
+  grafana-data:

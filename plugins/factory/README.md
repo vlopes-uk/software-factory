@@ -146,6 +146,30 @@ Every `/factory:status` and `/factory:build` first runs `gate.py tasks sync --ap
 
 Preview without changing anything: `bash <plugin>/scripts/gate tasks sync`.
 
+## Estimates, time spent and learning
+
+**How long will it take?** `/factory:plan` gives every task an estimate in two units, written in the issue body and in PLAN.md (§2 per task, §3 totals per milestone and story):
+
+```
+**Estimate:** agent 2h · human 6h
+```
+
+- **agent**: hours the factory's agents spend on the task: developer + QA review + fix rounds. These are measured.
+- **human**: what an experienced human developer would need, for comparison. Nobody builds the task by hand, so after each PR the QA reviewer re-estimates this from the finished work (`Human-dev estimate (after the work): 7h` in the review). The gap shows how far the plan's sense of scope was off.
+
+**Where am I?** `/factory:build` (and the developer and QA agents themselves) record when each stage starts and stops: `gate time start|stop <task> <dev|qa|fix>`. That goes into `.factory/timelog.jsonl`, which only the gate writes (the hook blocks direct edits). `/factory:build` commits it in the product repo at the end of each run (only that file), because it is the product's estimation history. `/factory:status` then shows:
+- tasks done, hours spent vs estimated, and hours still needed, both by estimate and as a **calibrated forecast**
+- the biggest deviations, and which stage the extra time went to (dev, QA or fix rounds)
+- open tasks already over their estimate, and tasks currently running
+
+The build's final report also shows estimate → actual per task.
+
+**Learning.** `gate time calibration` computes, per product, how actual agent time compares with the estimate (median actual/estimate) per category: `be|fe` / `feature|ops|sync|skeleton|bug` / `S|M`. A category needs 3 finished tasks before it is used; until then the broader category applies, then `all`, then no correction. `/factory:plan` and `/factory:bug` read these factors plus recent similar tasks before estimating, so new estimates build on what really happened. Forecasts use the same factors. Re-estimates never overwrite the original line: review mode adds `**Revised estimate:** … (<date>: <reason>)`, so scope changes and estimating errors can be told apart.
+
+**Dashboard.** `gate time export` (run automatically by `/factory:status` and `/factory:build`) writes `~/.factory/metrics/factory.db`. `dashboard/` in this repo holds a ready-made Grafana for it: `cd dashboard && docker compose up -d`, then http://localhost:3000. It has burn-down, estimate vs actual per milestone and story, deviations, where the time goes, and the accuracy trend. See `dashboard/README.md`.
+
+Commands: `gate time report [all|main|CR-NNN]`, `gate time calibration`, `gate time unlogged` (closed tasks with no recorded time), `gate time export`.
+
 ## DevOps (GitHub + Azure), kept lean
 
 One command, no extra gate. `OPERATIONS.md` is approved together with the architecture.
@@ -266,6 +290,7 @@ Use an exploration when you have an idea but don't know whether the app can do i
   - any model-initiated `gate.py approve`, or `gate.py explore reject`
   - writes into closed or unregistered explorations, and PoC docs before the approach is approved
   - PRs, merges, cherry-picks or pushes to `main` from `spike/EXP-*` branches
+  - direct writes to `.factory/timelog.jsonl` (time records go only through `gate time`)
 - If you edit an approved doc, that phase becomes `changed`. Re-approving it marks every downstream phase `stale`. Both states block the phases that depend on them.
 - `/factory:approve` works only for you, because its `!` injection runs outside the tool pipeline and the skill has `disable-model-invocation: true`.
 - For team use, add GitHub branch protection plus a CODEOWNERS entry on `docs/factory/` and `.factory/`, so approvals are also reviewed in PRs.
@@ -274,5 +299,6 @@ Use an exploration when you have an idea but don't know whether the app can do i
 
 ```bash
 python3 plugins/factory/tests/test_gate.py
+python3 plugins/factory/tests/test_timelog.py
 claude plugin validate ./plugins/factory
 ```

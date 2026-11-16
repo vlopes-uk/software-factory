@@ -63,7 +63,7 @@ def issues(repo: str, label: str) -> list[dict]:
         return [i for i in pool.get(repo.lower(), [])
                 if label in {l["name"] for l in i.get("labels", [])}]
     return _gh_json(["issue", "list", "--repo", repo, "--label", label, "--state", "all",
-                     "--limit", "500", "--json", "number,title,state,labels,body"])
+                     "--limit", "500", "--json", "number,title,state,labels,body,createdAt,closedAt"])
 
 
 def open_prs(repo: str) -> list[dict]:
@@ -145,6 +145,8 @@ def collect() -> dict:
                 "deps": line_refs(body, "depends on"),
                 "implements": impl,
                 "prs": in_review,
+                "body": body,
+                "createdAt": t.get("createdAt"), "closedAt": t.get("closedAt"),
             }
             tasks.append(task)
             by_ref[(repo, t["number"])] = task

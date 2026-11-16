@@ -19,6 +19,8 @@ Blocks (exit 2, reason on stderr):
      (promoted/rejected) explorations, PoC docs before the approach is approved, DECISION.md,
      and the model running `gate explore reject|pre` (rejecting is the human's call).
   7. spike branches (spike/EXP-NNN-*): no PR, no merge/cherry-pick/pull of them, no push to main.
+  8. .factory/timelog.jsonl (time spent per task): written only through `gate time ...`, never
+     edited directly, so the actuals used for deviations and learning can't be massaged.
 Applies to the main session and to subagents alike.
 """
 import json
@@ -89,6 +91,9 @@ if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         block("Blocked: .factory/snapshots/ holds the approved versions used for reviews; "
               "only gate.py writes there.")
     norm = path.replace("\\", "/")
+    if norm.endswith(".factory/timelog.jsonl"):
+        block("Blocked: .factory/timelog.jsonl is the factory's time record; only `gate time ...` "
+              "writes it (start/stop/human).")
     if norm.endswith(".factory/config.json") and gate:
         keys = ["autonomy", "preset", *gate.AUTONOMY_KEYS, *gate.AUTONOMY_PRESETS]
         if tool == "Write":
@@ -154,6 +159,10 @@ if tool == "Bash":
     if ".factory/snapshots" in cmd and re.search(r">|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i|\btouch\b|\brm\b|\bpython3?\b|\bperl\b", cmd) \
             and not re.search(r"scripts[/\\\\]gate", cmd):
         block("Blocked: .factory/snapshots/ is managed by gate.py (read it, never write it).")
+    if "timelog.jsonl" in cmd and re.search(
+            r">|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i|\btouch\b|\brm\b|\btruncate\b|\bpython3?\b|\bperl\b|\bdd\b|\bgit\s+(checkout|restore|reset)\b", cmd) \
+            and not re.search(r"scripts[/\\\\]gate", cmd):
+        block("Blocked: .factory/timelog.jsonl is written only through `gate time start|stop|human`.")
     if "state.json" in cmd and ".factory" in cmd:
         block("Blocked: do not read or modify .factory/state.json directly; "
               "use `gate.py status` or `gate.py check <phase>`.")

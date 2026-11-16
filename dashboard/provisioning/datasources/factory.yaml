@@ -1,0 +1,10 @@
+apiVersion: 1
+datasources:
+  - name: Factory
+    uid: factory-sqlite
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      path: /var/lib/factory/factory.db

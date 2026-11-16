@@ -1,6 +1,6 @@
 ---
 name: status
-description: Show the factory's phase gates, what is approved, changed or stale, and the next step.
+description: Show the factory's phase gates, what is approved, changed or stale, time spent vs estimates (remaining, forecast, deviations), and the next step.
 disable-model-invocation: true
 model: sonnet
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue list *) Bash(gh pr list *)
@@ -28,3 +28,17 @@ Present the gate output above as-is: the main baseline table, then the change re
 If the user wants to add a new feature, point them to `/factory:change new <title>`.
 
 If the build phase is `ready`, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks list` and summarise the open tasks by status (READY / WAITING / IN-REVIEW / BLOCKED / GATED), grouped by story. Then suggest `/factory:build next`, or `/factory:build story S-NN` for a story whose tasks are all ready.
+
+## Time: estimates, spent, remaining
+
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time report all --export`
+
+Hours are **agent hours** (the factory's developers, QA and fix rounds, measured automatically by `/factory:build`); the human-dev figures are the plan's estimate of what a human developer would need, compared with QA's estimate after each task. Summarise in at most 6 lines:
+
+- **Where we are:** tasks done, hours spent against the estimate, and the hours still needed: the estimate-based remainder **and** the calibrated forecast. Lead with the forecast, and say what it is based on (the calibration factor and sample count, or "uncalibrated" when there is too little history).
+- **Deviations:** the 1–3 biggest overruns from the report, and which stage the extra time went to (dev, QA, or fix rounds). Point out a pattern if one category keeps running over (for example, `fe` tasks or fix rounds).
+- **Open tasks already over their estimate**, if any.
+- If the report says `TIME UNAVAILABLE`, mention it in one line and skip the rest of this section. Mention the dashboard data refresh only if the output contains `EXPORT FAILED`.
+
+Close the section with: "Dashboard: `docker compose up -d` in the factory repo's `dashboard/` folder, then http://localhost:3000." Say it once; don't repeat the setup steps.
+

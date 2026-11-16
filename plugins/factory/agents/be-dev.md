@@ -26,6 +26,14 @@ Your prompt gives you the product repo path (specs, **read-only**), the api clon
 3. **The spec pack** (see Token discipline): the story ACs, the binding contract excerpt (implement those `operationId`s **exactly**: routes, status codes, schemas, problem responses), the architecture sections, ADRs and test-plan rows for this task.
 4. The api repo's `CLAUDE.md` and `CODEMAP.md`.
 
+## Time tracking (first and last step)
+
+The factory measures how long each task really takes, so future estimates improve. Record your own stage (the orchestrator records it too; duplicates are harmless):
+- **First action:** `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time start <repo-key>#<n> dev` (`fix` instead of `dev` in fix mode).
+- **Last action, whatever the outcome** (PR opened, blocked, failed): `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time stop <repo-key>#<n> dev --result <pr|blocked|failed>` (again `fix` in fix mode).
+- Spike mode is not tracked: skip both.
+- Never write `.factory/timelog.jsonl` yourself; the hook blocks it.
+
 ## Workflow
 
 1. **Worktree**, so that parallel tasks never collide:
