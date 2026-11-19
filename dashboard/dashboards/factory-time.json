@@ -23,10 +23,7 @@
           "type": "frser-sqlite-datasource",
           "uid": "factory-sqlite"
         },
-        "query": {
-          "queryText": "SELECT DISTINCT product FROM tasks ORDER BY product",
-          "rawQueryText": "SELECT DISTINCT product FROM tasks ORDER BY product"
-        },
+        "query": "SELECT DISTINCT product FROM tasks ORDER BY product",
         "definition": "SELECT DISTINCT product FROM tasks ORDER BY product",
         "refresh": 1,
         "sort": 0,
@@ -42,10 +39,7 @@
           "type": "frser-sqlite-datasource",
           "uid": "factory-sqlite"
         },
-        "query": {
-          "queryText": "SELECT DISTINCT version FROM tasks WHERE product = '$product' ORDER BY version DESC",
-          "rawQueryText": "SELECT DISTINCT version FROM tasks WHERE product = '$product' ORDER BY version DESC"
-        },
+        "query": "SELECT DISTINCT version FROM tasks WHERE product = '$product' ORDER BY version DESC",
         "definition": "SELECT DISTINCT version FROM tasks WHERE product = '$product' ORDER BY version DESC",
         "refresh": 1,
         "sort": 0,
@@ -69,10 +63,7 @@
           "type": "frser-sqlite-datasource",
           "uid": "factory-sqlite"
         },
-        "query": {
-          "queryText": "SELECT DISTINCT status FROM tasks WHERE product = '$product' ORDER BY status",
-          "rawQueryText": "SELECT DISTINCT status FROM tasks WHERE product = '$product' ORDER BY status"
-        },
+        "query": "SELECT DISTINCT status FROM tasks WHERE product = '$product' ORDER BY status",
         "definition": "SELECT DISTINCT status FROM tasks WHERE product = '$product' ORDER BY status",
         "refresh": 1,
         "sort": 0,
@@ -96,10 +87,7 @@
           "type": "frser-sqlite-datasource",
           "uid": "factory-sqlite"
         },
-        "query": {
-          "queryText": "SELECT DISTINCT type FROM tasks WHERE product = '$product' ORDER BY type",
-          "rawQueryText": "SELECT DISTINCT type FROM tasks WHERE product = '$product' ORDER BY type"
-        },
+        "query": "SELECT DISTINCT type FROM tasks WHERE product = '$product' ORDER BY type",
         "definition": "SELECT DISTINCT type FROM tasks WHERE product = '$product' ORDER BY type",
         "refresh": 1,
         "sort": 0,
