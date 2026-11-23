@@ -16,7 +16,7 @@ Your prompt gives you the product repo path (specs, **read-only**), the web clon
 - **Read the spec pack, not whole documents.** `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" spec <repo-key>#<n>` prints exactly the story ACs, contract operations and schemas, architecture sections, ADRs, screens and test rows this task references. Open a full document only for items listed under **MISSING**, and then only that part.
 - **Read `CODEMAP.md` first** (repo root) to find where things live, instead of searching the codebase. Grep only for what the map doesn't cover.
 - **Quiet output.** Run builds and tests in quiet mode and read failures only (commands below). Never paste whole logs into your reasoning; if a command fails, look at the failing test names and their messages, with `| tail -n 60` or `grep -A 20` on the error.
-- **Inner loop vs final check.** While working, run only the tests you're touching (a filter). Run the full suite once before committing.
+- **Inner loop vs final check.** While working, run only the tests you're touching (a filter). Before committing, run the **affected tests** (Verify, step 6), never the full suite: CI runs the full suite on the same machine, and local full runs alongside it make CI time out.
 - **`gh` with fields.** Always use `--json` with only the fields you need. Use `git diff --stat` before reading full diffs.
 
 ## Sources of truth (read before coding)
@@ -42,7 +42,7 @@ The factory measures how long each task really takes, so future estimates improv
    git worktree add ../.factory-worktrees/web-<n> -b factory/<n>-<slug> origin/main
    cd ../.factory-worktrees/web-<n> && npm ci
    ```
-   In `fix` mode, add a worktree on the existing PR branch and read every review comment. Then run `git config rerere.enabled true`.
+   In `fix` mode, add a worktree on the existing PR branch and read every review comment. If your prompt gives a **CI failure** (the failing test and its error), reproduce that test file first (`npx vitest run --maxWorkers=3 <file> -t <name>`), fix it, and include it in your affected run. Then run `git config rerere.enabled true`.
 2. **Contract:** `npm run gen:api` (the `pre*` scripts also run it) generates the gitignored `src/api/schema.d.ts` from `contracts/openapi.yaml`. **Don't copy or edit `contracts/`**: only a sync-contract task (title `sync contract`) runs `npm run contract:sync` and commits it. If an operation you need isn't in `contracts/openapi.yaml` yet, the sync task is missing or unmerged: comment, add `factory:blocked`, and stop.
 3. **Mock first:** add MSW handlers in your feature's own `src/features/<feature>/mocks.ts` (picked up by `import.meta.glob`; never edit `src/mocks/handlers.ts`) for the operations you use, with realistic data and the problem+json error cases. This lets you build before the backend lands. If the real endpoints are already deployed, say so in the PR.
 4. **Build** the feature in `src/features/<feature>/`, with its routes in that folder's `routes.tsx` (never edit `src/app/router.tsx`):
@@ -53,17 +53,22 @@ The factory measures how long each task really takes, so future estimates improv
 5. **Test:**
    - Vitest + RTL with `user-event`, one test per AC and state, with the network through MSW
    - the Playwright e2e and axe checks that TEST-PLAN assigns to this task
-6. **Verify, all green.** Run these quietly:
+6. **Verify, all green: affected tests only. CI is the full-suite gate.** Run these quietly:
    - `npm ci --no-audit --no-fund --loglevel=error`
    - `npm run lint -- --quiet`
-   - `npm run typecheck`
-   - `npm test -- --run --reporter=dot`
+   - `npm run typecheck` (its `pre` script also regenerates the API types the tests need)
+   - `npm run i18n:check`
+   - the affected tests, from the files you changed (`git diff --name-only --diff-filter=d $(git merge-base origin/main HEAD)`):
+     - `npx vitest related --run --maxWorkers=3 --reporter=dot <changed source files>`
+     - `npx vitest run --maxWorkers=3 --reporter=dot <changed test files>`
    - `npm run build --silent`
    - `npx playwright test <spec files you touched> --reporter=line`
+   - **Shared code changed?** (test setup or `vitest.config`, the MSW store or `src/mocks/**`, `src/app/**`, shared components in `src/components/`.) Widen the run to the folders that import it, found with `grep -rl "<module path>" src | xargs -n1 dirname | sort -u`, and pass those folders to `npx vitest run --maxWorkers=3 --reporter=dot <folders>`. **Not** the whole suite. If practically every test uses it (global test setup, the MSW server), run your feature folders plus `src/components` and `src/mocks`, and write `shared code changed: <file>; wider run left to CI` in the PR.
+   - **Never run the full `npm test`.** Always keep `--maxWorkers=3`.
 
-   While working, run `npm test -- --run <path or -t name>`, then the full run once at the end.
+   While working, run `npx vitest run --maxWorkers=3 <path>` (or `-t <name>`).
    **Code map:** if you added or moved a feature folder, screen or shared component, update `CODEMAP.md` in the same PR: add or edit **only your own row**, in alphabetical position, and never reflow the table.
-7. **Commit** in conventional commits, then push and open the PR with `gh pr create --repo <web repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, the story link, an AC checklist with the test proving each, the screens and states covered, whether it is mocked or live, and the test summary. The SWA preview URL appears on the PR from CI.
+7. **Commit** in conventional commits, then push and open the PR with `gh pr create --repo <web repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, the story link, an AC checklist with the test proving each, the screens and states covered, whether it is mocked or live, and the test summary (affected tests: pass/fail counts, the files or folders run, and `full suite: left to CI`). The SWA preview URL appears on the PR from CI.
 8. **Clean up:** `cd <web clone> && git worktree remove ../.factory-worktrees/web-<n>`.
 
 ## Cheap rebases (conflicts cost tokens; avoid them)
@@ -75,15 +80,15 @@ The factory measures how long each task really takes, so future estimates improv
   - `src/api/schema.d.ts` is gitignored and can't conflict. If it shows up, the branch committed it by mistake: `git rm --cached` it.
   - `contracts/openapi.yaml`: never edited in feature tasks. Take main's (`git checkout --ours`), and run `npm run gen:api`.
   - `CODEMAP.md`: union merge (`.gitattributes`) normally avoids conflicts; if one remains, keep both rows, alphabetical.
-  - Anything else is a real conflict: resolve only the hunks (`git diff` on that file), then run the affected tests, not the whole suite twice.
-- During a rebase, `--ours` is **main** and `--theirs` is **your commit**. Finish with `git rebase --continue`, rerun the verify step once, then `git push --force-with-lease`.
+  - Anything else is a real conflict: resolve only the hunks (`git diff` on that file), then run the affected tests (Verify, step 6) for the files you resolved, never the full suite.
+- During a rebase, `--ours` is **main** and `--theirs` is **your commit**. Finish with `git rebase --continue`, rerun the verify step (affected tests) once, then `git push --force-with-lease`.
 - If the same files keep conflicting with another open task, say so in your return value: the planner should have sequenced them (shared hotspot).
 
 ## Bug fixes (issue labelled `bug`)
 
 1. **Reproduce first.** Follow the issue's steps locally, or in a test, until you see the failure. If you can't reproduce it, comment on the issue with what you tried, add `factory:blocked`, and stop.
 2. **Regression test first.** Write a Vitest + RTL test (or a Playwright e2e test for cross-screen flows) that reproduces the bug and **fails** on the current code. Commit it on its own (`test: reproduce BUG-NNN`) before the fix, so the history shows red then green.
-3. **Fix the root cause**, not the symptom, in the smallest change that makes the new test pass while all others stay green.
+3. **Fix the root cause**, not the symptom, in the smallest change that makes the new test pass while the affected tests stay green (the Verify rule: related tests, your feature folders and whatever imports the code you changed; the full suite is left to CI).
 4. **The PR body** adds:
    - `Root cause:` (2–3 sentences)
    - `Regression test:` (the test name and file)
@@ -150,4 +155,4 @@ Use this mode when your prompt says `Mode: spike EXP-NNN`. You are **proving tha
 
 ## Return value
 
-The PR URL, a summary of the changes, the test results, whether it is mocked or live, and anything blocked or skipped.
+The PR URL, a summary of the changes, the affected-test results (what was run, pass/fail counts) with `full suite: left to CI`, whether it is mocked or live, and anything blocked or skipped.

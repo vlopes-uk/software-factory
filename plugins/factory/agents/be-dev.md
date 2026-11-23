@@ -16,7 +16,7 @@ Your prompt gives you the product repo path (specs, **read-only**), the api clon
 - **Read the spec pack, not whole documents.** `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" spec <repo-key>#<n>` prints exactly the story ACs, contract operations and schemas, architecture sections, ADRs, screens and test rows this task references. Open a full document only for items listed under **MISSING**, and then only that part.
 - **Read `CODEMAP.md` first** (repo root) to find where things live, instead of searching the codebase. Grep only for what the map doesn't cover.
 - **Quiet output.** Run builds and tests in quiet mode and read failures only (commands below). Never paste whole logs into your reasoning; if a command fails, look at the failing test names and their messages, with `| tail -n 60` or `grep -A 20` on the error.
-- **Inner loop vs final check.** While working, run only the tests you're touching (a filter). Run the full suite once before committing.
+- **Inner loop vs final check.** While working, run only the tests you're touching (a filter). Before committing, run the **affected tests** (Verify, step 5), never the full suite: CI runs the full suite on the same machine, and local full runs alongside it make CI time out.
 - **`gh` with fields.** Always use `--json` with only the fields you need. Use `git diff --stat` before reading full diffs.
 
 ## Sources of truth (read before coding)
@@ -42,22 +42,26 @@ The factory measures how long each task really takes, so future estimates improv
    git worktree add ../.factory-worktrees/api-<n> -b factory/<n>-<slug> origin/main
    cd ../.factory-worktrees/api-<n>
    ```
-   In `fix` mode, find the PR branch (`gh pr list --repo <api repo> --search "<n> in:body"`), then run `git worktree add ../.factory-worktrees/api-<n> <branch>` and read every review comment (`gh pr view <pr> --repo <api repo> --comments`). Then run `git config rerere.enabled true`.
+   In `fix` mode, find the PR branch (`gh pr list --repo <api repo> --search "<n> in:body"`), then run `git worktree add ../.factory-worktrees/api-<n> <branch>` and read every review comment (`gh pr view <pr> --repo <api repo> --comments`). If your prompt gives a **CI failure** (the failing test and its error), reproduce that test first with a `--filter` on its name, fix it, and include it in your affected run. Then run `git config rerere.enabled true`.
 2. **Plan:** a short checklist mapping each AC and test case ID to a test.
 3. **Tests first** (xUnit):
    - **Unit tests:** one test class per class under test; **create the Moq mocks in the test class constructor** and keep them in `private readonly Mock<T>` fields; names follow `Method_Scenario_ExpectedResult`; Arrange/Act/Assert; cover the error paths.
    - **Integration tests:** `WebApplicationFactory<Program>` + Testcontainers for the DB. Assert the status codes and `application/problem+json` bodies from the contract.
    - **Contract conformance:** extend the conformance test so the new operations are checked against `contracts/openapi.yaml`. **Don't copy or edit `contracts/`**: only a sync-contract task does that. If your operations aren't in it yet, the sync task is missing or unmerged: comment, add `factory:blocked`, and stop.
 4. **Implement** the smallest change in the right feature slice. The feature self-registers: endpoints in its `IEndpointGroup`, DI in its `IServiceModule`; never add per-feature lines to `Program.cs`. Use EF Core migrations if the schema changes (`dotnet ef migrations add <Name>`, committed). Use FluentValidation validators, and `IOptions<T>` for config. No secrets in code or appsettings.
-5. **Verify, all green.** Run these quietly:
+5. **Verify, all green: affected tests only. CI is the full-suite gate.** Run these quietly:
    - `dotnet build -warnaserror -v q -clp:ErrorsOnly`
    - `dotnet format --verify-no-changes -v q`
-   - `dotnet test --nologo -v q --logger "console;verbosity=minimal"`
+   - the affected tests: `dotnet test --no-build --nologo -v q --logger "console;verbosity=minimal" --filter "<filter>"`, where the filter is
+     - `FullyQualifiedName~<Feature namespace>` for every feature namespace you touched (unit and integration tests), joined with `|`
+     - plus the guard tests that check every operation: `FullyQualifiedName~ContractConformanceTests|FullyQualifiedName~AuthorizationTests|FullyQualifiedName~BodyBindingTests` (or whatever this repo calls them; `CODEMAP.md` lists them)
+   - **Shared code changed?** (`Program.cs`, DI modules, shared Domain/Infrastructure types, the `WebApplicationFactory` fixture or other test setup.) Widen the filter to the test namespaces that use it, found with `grep -rl "<TypeName>" tests/ | xargs -n1 dirname | sort -u`, **not** to the whole suite. If practically every test uses it (for example `Program.cs` or the shared fixture), keep your features plus the guard tests and write `shared code changed: <file>; wider run left to CI` in the PR.
+   - **Never run the full `dotnet test`** (no filter). Find what you changed with `git diff --name-only --diff-filter=d $(git merge-base origin/main HEAD)`.
 
-   While working, use `dotnet test --filter "FullyQualifiedName~<Feature>"`, then the full run once at the end. Fix what you caused, and report pre-existing failures without hiding them.
+   While working, use `dotnet test --filter "FullyQualifiedName~<Feature>"`. Fix what you caused, and report pre-existing failures without hiding them.
    **Code map:** if you added or moved a feature folder, project or key file, update `CODEMAP.md` in the same PR: add or edit **only your own row**, in alphabetical position, and never reflow the table.
 6. **Commit** in small conventional commits: `feat(orders): add create order endpoint (owner/api#<n>)`.
-7. **Push and open the PR:** `gh pr create --repo <api repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, a link to the story, an AC checklist with the test proving each, the operationIds implemented, the test summary, migrations added, and any new configuration or Key Vault secrets. In `fix` mode, push to the same branch and reply to each review comment you addressed.
+7. **Push and open the PR:** `gh pr create --repo <api repo> --title "[T-NN] <title>" --body-file <file>`. The body contains `Closes #<n>`, a link to the story, an AC checklist with the test proving each, the operationIds implemented, the test summary (affected tests: pass/fail counts, the filter used, and `full suite: left to CI`), migrations added, and any new configuration or Key Vault secrets. In `fix` mode, push to the same branch and reply to each review comment you addressed.
 8. **Clean up:** `cd <api clone> && git worktree remove ../.factory-worktrees/api-<n>`.
 
 ## Cheap rebases (conflicts cost tokens; avoid them)
@@ -69,15 +73,15 @@ The factory measures how long each task really takes, so future estimates improv
   - `Migrations/*ModelSnapshot.cs` or a migration clash: take main's snapshot and migrations (`git checkout --ours`), delete your own migration files, finish the rebase, then re-run `dotnet ef migrations add <YourName>` and commit it. Never hand-merge the snapshot.
   - `Program.cs` should not conflict, because features self-register. If it does, keep main's version and move your registration into your feature's `IEndpointGroup`/`IServiceModule`.
   - `CODEMAP.md`: union merge (`.gitattributes`) normally avoids conflicts; if one remains, keep both rows, alphabetical.
-  - Anything else is a real conflict: resolve only the hunks (`git diff` on that file), then run the affected tests, not the whole suite twice.
-- During a rebase, `--ours` is **main** and `--theirs` is **your commit**. Finish with `git rebase --continue`, rerun the verify step once, then `git push --force-with-lease`.
+  - Anything else is a real conflict: resolve only the hunks (`git diff` on that file), then run the affected tests (Verify, step 5) for the files you resolved, never the full suite.
+- During a rebase, `--ours` is **main** and `--theirs` is **your commit**. Finish with `git rebase --continue`, rerun the verify step (affected tests) once, then `git push --force-with-lease`.
 - If the same files keep conflicting with another open task, say so in your return value: the planner should have sequenced them (shared hotspot).
 
 ## Bug fixes (issue labelled `bug`)
 
 1. **Reproduce first.** Follow the issue's steps locally, or in a test, until you see the failure. If you can't reproduce it, comment on the issue with what you tried, add `factory:blocked`, and stop.
 2. **Regression test first.** Write an xUnit test (unit test with Moq, or a WebApplicationFactory integration test, whichever reproduces it most directly) that reproduces the bug and **fails** on the current code. Commit it on its own (`test: reproduce BUG-NNN`) before the fix, so the history shows red then green.
-3. **Fix the root cause**, not the symptom, in the smallest change that makes the new test pass while all others stay green.
+3. **Fix the root cause**, not the symptom, in the smallest change that makes the new test pass while the affected tests stay green (the Verify rule: your features, the guard tests and whatever uses the code you changed; the full suite is left to CI).
 4. **The PR body** adds:
    - `Root cause:` (2–3 sentences)
    - `Regression test:` (the test name and file)
@@ -139,4 +143,4 @@ Use this mode when your prompt says `Mode: spike EXP-NNN`. You are **proving tha
 
 ## Return value
 
-The PR URL, a summary of the changes, the test results (pass/fail counts per project), migrations, and anything blocked or skipped.
+The PR URL, a summary of the changes, the affected-test results (pass/fail counts per project and the filter used) with `full suite: left to CI`, migrations, and anything blocked or skipped.

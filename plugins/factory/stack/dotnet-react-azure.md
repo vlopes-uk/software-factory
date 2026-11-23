@@ -44,7 +44,8 @@ Every factory role reads this file. These are the **fixed** choices. Only the de
   - unit tests: one test class per class under test; **mocks are created in the test class constructor** and stored in readonly fields; naming `Method_Scenario_ExpectedResult`; Arrange/Act/Assert
   - integration tests: `WebApplicationFactory<Program>` plus Testcontainers for the real database engine; no in-memory provider for relational behaviour
   - the contract conformance test described above
-- Commands (agents use the quiet forms): `dotnet restore -v q`, `dotnet build -warnaserror -v q -clp:ErrorsOnly`, `dotnet format --verify-no-changes -v q`, `dotnet test --nologo -v q --logger "console;verbosity=minimal"` (CI adds `--collect:"XPlat Code Coverage"`).
+- Commands (agents use the quiet forms): `dotnet restore -v q`, `dotnet build -warnaserror -v q -clp:ErrorsOnly`, `dotnet format --verify-no-changes -v q`, and the **affected tests** only: `dotnet test --no-build --nologo -v q --logger "console;verbosity=minimal" --filter "<filter>"`, where the filter covers the feature namespaces touched (`FullyQualifiedName~<Feature>`) plus the guard tests that check every operation (`ContractConformanceTests`, `AuthorizationTests`, `BodyBindingTests`). When shared code changes (`Program.cs`, DI, shared types, test fixtures), widen to the test namespaces that use it, not to the whole suite.
+- **CI is the full-suite gate.** Agents never run the unfiltered `dotnet test`: CI runs it (with `--collect:"XPlat Code Coverage"`) on a self-hosted runner on the same machine, and extra local full runs make CI time out. Agents report `full suite: left to CI`, and QA reads CI's result, telling real assertion failures apart from load failures (timeouts, timing tests, the job limit).
 
 ## Frontend (`web` repo)
 
@@ -65,7 +66,8 @@ Every factory role reads this file. These are the **fixed** choices. Only the de
 - **Tests:** Vitest with React Testing Library and `@testing-library/user-event` for components; MSW for network; **Playwright** for end-to-end, including an `@axe-core/playwright` accessibility check per screen.
 - **Smoke specs:** `e2e/smoke.spec.ts`, with tests tagged `@smoke`, runs against any deployed URL. `playwright.config.ts` uses `process.env.BASE_URL` when it is set, and starts the preview server with MSW only when it isn't. Smoke tests are **read-only**: they load the key screens, check there are no console errors, and wait for a successful real API response, but never submit forms or create data. CI runs them after every dev and prod deploy.
 - **Version:** CI writes `dist/version.json` (`{ "version": "<sha or tag>" }`) after the build, served at `/version.json`.
-- Commands (agents use the quiet forms): `npm ci --no-audit --no-fund --loglevel=error`, `npm run lint -- --quiet` (ESLint), `npm run typecheck` (`tsc --noEmit`), `npm test -- --run --reporter=dot`, `npm run build --silent`, `npx playwright test --reporter=line`.
+- Commands (agents use the quiet forms): `npm ci --no-audit --no-fund --loglevel=error`, `npm run lint -- --quiet` (ESLint), `npm run typecheck` (`tsc --noEmit`), `npm run i18n:check`, `npm run build --silent`, and the **affected tests** only: `npx vitest related --run --maxWorkers=3 --reporter=dot <changed source files>` plus `npx vitest run --maxWorkers=3 --reporter=dot <changed test files>`, and `npx playwright test <changed spec files> --reporter=line`. When shared code changes (test setup, `src/mocks/**`, `src/app/**`, `src/components/`), widen to the folders that import it, not to the whole suite. Always keep `--maxWorkers=3`.
+- **CI is the full-suite gate.** Agents never run the full `npm test` or the full `npx playwright test`; CI runs both. Agents report `full suite: left to CI`.
 
 ## Azure and delivery
 

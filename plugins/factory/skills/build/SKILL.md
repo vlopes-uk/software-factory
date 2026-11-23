@@ -4,7 +4,7 @@ description: Build factory tasks: dispatch the .NET/React developer subagents an
 disable-model-invocation: true
 arguments: target extra
 argument-hint: "next | story S-NN | <api#N | web#N | owner/repo#N> [fix | no-qa]"
-allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue view *) Bash(gh pr list *) Bash(gh pr view *) Bash(git -C *)
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue view *) Bash(gh pr list *) Bash(gh pr view *) Bash(gh pr checks *) Bash(gh run view *) Bash(git -C *)
 ---
 
 # Build: $ARGUMENTS
@@ -77,11 +77,15 @@ Run this for each started task. Separate tasks' chains can run in parallel, up t
    - then dispatch QA again on the same PR
 
    Count the rounds yourself and **never exceed `max_fix_rounds`**. If a fix round makes no progress (the same failures again), stop early.
-4. **End state.** Record exactly one of:
-   - ✅ **Ready to merge:** QA passed (or QA is off and the developer's checks passed). Give the PR link. Being behind `main` doesn't matter; only a real conflict (`gh pr view --json mergeable` = `CONFLICTING`) needs `/factory:build fix <repo>#N`, which applies the cheap-rebase rules.
-   - ⚠️ **Needs you:** QA still requests changes after the allowed rounds. Give the open issues in 3 lines max and the PR link.
+4. **CI check (CI is the full-suite gate; the agents run only affected tests).** Once QA passed (or QA is off and the developer's checks passed), make sure CI has no **real** test failure:
+   - If QA's review reports `CI: passed`, or `CI: failed (load only)`, for the PR's current head sha, use that.
+   - Otherwise (QA off, `CI: pending`, or new commits since), wait yourself: `gh pr checks <pr> --repo <repo> --watch --interval 60`, with the Bash call at its maximum timeout, repeated if it's cut off, up to about 40 minutes in total. For a failed or cancelled `build-test` job, take the run id from `gh pr checks <pr> --repo <repo> --json name,bucket,link` (`/actions/runs/<run id>/`) and read `gh run view <run id> --repo <repo> --log-failed | tail -n 150`. Classify each failure as the QA reviewer does: **real** (an assertion failure caused by the PR) or **load** (timeouts, timing tests, the job cancelled at its time limit).
+   - **A real CI failure counts as a fix round.** If fewer than `max_fix_rounds` rounds have run, dispatch the developer in **fix** mode with the failing test names and their errors in the prompt (`CI failure: <test>: <error>`), then QA again (if `auto_qa`), then this CI check again. If no rounds are left, the end state is ⚠️ Needs you.
+5. **End state.** Record exactly one of:
+   - ✅ **Ready to merge:** QA passed (or QA is off and the developer's checks passed) **and CI has no real (non-load) test failure**. Give the PR link. If CI failed only on load (timeouts, timing tests, the job limit), add "re-run the failed CI jobs before merging". Being behind `main` doesn't matter; only a real conflict (`gh pr view --json mergeable` = `CONFLICTING`) needs `/factory:build fix <repo>#N`, which applies the cheap-rebase rules.
+   - ⚠️ **Needs you:** QA still requests changes, or CI still has a real failure, after the allowed rounds; or CI hasn't finished after ~40 minutes (say "CI pending"). Give the open issues in 3 lines max and the PR link.
    - ⛔ **Blocked:** the developer asked a question or the gate refused. Give the reason.
-5. **Continue** (only if `auto_continue` is true). When a chain ends and fewer than `max_tasks_per_run` tasks have started in this run, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks plan next` and start its `NEXT:` task the same way, without asking. Tasks that wait on unmerged work won't show as ready, so the run stops naturally. Stop when nothing is ready or the cap is reached.
+6. **Continue** (only if `auto_continue` is true). When a chain ends and fewer than `max_tasks_per_run` tasks have started in this run, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks plan next` and start its `NEXT:` task the same way, without asking. Tasks that wait on unmerged work won't show as ready, so the run stops naturally. Stop when nothing is ready or the cap is reached.
 
 ## Dispatch (developer, per task)
 
@@ -97,6 +101,7 @@ Run this for each started task. Separate tasks' chains can run in parallel, up t
    > Code repo clone: `<absolute path of the clone>` (GitHub: `<owner/repo>`)
    > Stack profile: `${CLAUDE_PLUGIN_ROOT}/stack/dotnet-react-azure.md`
    > Binding contract: `<absolute path chosen in step 2>`; change request: `<CR-NNN or none>`
+   > CI failure (fix mode after a real CI failure only; otherwise leave this line out): `<test name>: <error>`, one line per failing test
    > Follow your instructions exactly. Return the PR URL, a summary of the changes, the test results, and anything you could not do.
 
 ## Final report
