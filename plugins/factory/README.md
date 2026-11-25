@@ -119,6 +119,27 @@ Existing repos: run the "adopt conflict-free layout" task once per code repo (se
 - QA checks that the test fails on the base branch and passes on the PR.
 - A closed story with an open bug fix is reopened by the sync until the fix is merged.
 
+## Production hotfixes
+
+A normal bug fix ships with the next release from `main`, together with everything else merged since. When prod can't wait for that:
+
+```text
+/factory:hotfix On prod, two patients both got a confirmation for the same 10:00 slot
+/factory:hotfix api#31                  # or an existing bug
+```
+
+1. **What runs in prod:** the version prod reports (`/health/version`, `/version.json`), for example `v1.4.0`.
+2. **The bug:** the same intake and triage as `/factory:bug`. Only `critical` or `high` bugs qualify.
+3. **Roll back or fix forward?** If the bug came with the last release and rolling back is safe (no migration that isn't backward compatible), it recommends re-running the previous release's `deploy-prod`, which you approve in GitHub. The fix then goes through `main` as a normal bug. Otherwise it fixes forward:
+4. **The hotfix branch:** `hotfix/v1.4.1`, created from the `v1.4.0` tag. The task gets the label `hotfix` and the body line `Hotfix: v1.4.1`.
+5. **`/factory:build api#31`:** the developer branches from `hotfix/v1.4.1`, writes a regression test that fails on what prod runs, and makes the smallest fix (no contract changes, packages, refactors or breaking migrations). QA checks that, as usual. Hotfix tasks rank first, and the build gate doesn't apply to them. **You merge the PR into `hotfix/v1.4.1`.**
+6. **`/factory:hotfix release`:** checks that the branch holds only the fix and CI is green, then publishes `v1.4.1` from the hotfix branch (`--target hotfix/v1.4.1`). The other repo is tagged only. It ships api first, then web, and verifies each one in prod, plus the bug itself. **You approve `deploy-prod` in GitHub.**
+7. **`/factory:hotfix backport`:** a developer cherry-picks the fix onto `main` in its own PR (`[BUG-NNN] back-merge hotfix v1.4.1`). QA checks that it's the same fix. Merging it closes the issue.
+
+Until the back-merge lands, the task shows as `BACKPORT` in `/factory:status`, and `/factory:devops release` refuses to ship `main`, because that would bring the bug back. `/factory:hotfix status` shows every hotfix in flight.
+
+**Existing repos:** add `'hotfix/**'` to `push.branches` in each `ci.yml`, and in the web repo, limit the `deploy` job to PRs and `main` (see `templates/ci/`), so a push to a hotfix branch never lands on dev. Then add a ruleset on `hotfix/**` with the same rules as `main`.
+
 ## Build autonomy: how much happens without you
 
 Planning approvals, merging PRs and production deploys **always** need you. Autonomy only shapes the build phase, and only you can change it (the hook blocks agents):
@@ -298,7 +319,8 @@ Use an exploration when you have an idea but don't know whether the app can do i
 - Each role skill runs `gate.py check <phase> --soft` through `!` injection before the model sees the prompt. When blocked, it prints `GATE BLOCKED` plus the reason, and the role stops.
 - `hooks/protect_state.py` (PreToolUse, applies to subagents too) is the hard enforcement. It refuses:
   - writes into a phase's `docs/factory/0N-*` folder while upstream isn't approved, whether by Write/Edit or by a shell write
-  - `gh pr create` while the build phase is closed
+  - `gh pr create` while the build phase is closed (a PR into `hotfix/vX.Y.Z` is the exception)
+  - pushes to `hotfix/*` branches: they change only through reviewed PRs
   - any edit to the state file
   - any model-initiated `gate.py approve`, or `gate.py explore reject`
   - writes into closed or unregistered explorations, and PoC docs before the approach is approved

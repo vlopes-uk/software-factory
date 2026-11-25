@@ -68,6 +68,17 @@ In addition to the checks above:
 - The issue's "Expected (per spec)" now holds.
 - If any of these fail, the verdict is **CHANGES REQUESTED**.
 
+## Hotfix and back-merge PRs
+
+**Hotfix PR** (base `hotfix/vX.Y.Z`, body starts with `Hotfix:`). The bug-fix checks apply, with the PR's base branch (the release prod runs) as the base. In addition:
+- **Base is right:** the PR targets `hotfix/vX.Y.Z`, not `main`.
+- **Minimal:** no change to `contracts/openapi.yaml`, no new packages, no refactors or unrelated clean-ups, and no migration unless it is additive and backward compatible, with the PR saying why. Anything more is ❌ "not a hotfix", and the verdict is **CHANGES REQUESTED**.
+
+**Back-merge PR** (title `back-merge hotfix vX.Y.Z`, head `factory/<n>-backport`, base `main`):
+- **Same fix:** compare it with the hotfix PR, for example `git range-diff <hotfix merge commit>^..<hotfix merge commit> origin/main..origin/<headRefName>`. Any difference must be explained as a conflict resolution in the PR body.
+- **The hotfix's regression test exists on this branch and passes.** No fail-before check here: `main` may already behave differently.
+- Everything else (checks, affected tests, CI) as for any PR.
+
 ## Change requests
 
 If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.

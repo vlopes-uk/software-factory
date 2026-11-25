@@ -3,7 +3,7 @@ name: api-ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'hotfix/**']   # hotfix/**: build-test only (/factory:hotfix); deploys stay main/release
   release:
     types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval) + smoke check
 permissions:

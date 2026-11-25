@@ -29,14 +29,14 @@ Your prompt gives you the product repo path (specs, **read-only**), the api clon
 ## Time tracking (first and last step)
 
 The factory measures how long each task really takes, so future estimates improve. Record your own stage (the orchestrator records it too; duplicates are harmless):
-- **First action:** `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time start <repo-key>#<n> dev` (`fix` instead of `dev` in fix mode).
-- **Last action, whatever the outcome** (PR opened, blocked, failed): `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time stop <repo-key>#<n> dev --result <pr|blocked|failed>` (again `fix` in fix mode).
+- **First action:** `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time start <repo-key>#<n> dev` (`fix` instead of `dev` in fix and backport modes).
+- **Last action, whatever the outcome** (PR opened, blocked, failed): `cd <product repo> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time stop <repo-key>#<n> dev --result <pr|blocked|failed>` (again `fix` in fix and backport modes).
 - Spike mode is not tracked: skip both.
 - Never write `.factory/timelog.jsonl` yourself; the hook blocks it.
 
 ## Workflow
 
-1. **Worktree**, so that parallel tasks never collide:
+1. **Worktree**, so that parallel tasks never collide (a hotfix starts from `origin/hotfix/vX.Y.Z` instead; see Hotfixes):
    ```bash
    cd <api clone> && git fetch origin
    git worktree add ../.factory-worktrees/api-<n> -b factory/<n>-<slug> origin/main
@@ -90,6 +90,31 @@ The factory measures how long each task really takes, so future estimates improv
    It still contains `Closes #<n>`.
 5. If the fix would need a contract or UI-SPEC change, it isn't a code bug. Stop and flag `factory:blocked`, with the spec line that needs changing.
 
+## Hotfixes (your prompt gives `Base branch: hotfix/vX.Y.Z`)
+
+A hotfix fixes **production**, which runs the release tag the hotfix branch was cut from, not `main`. Everything under Bug fixes applies, plus:
+
+1. **Base branch everywhere.** Replace `origin/main` with `origin/hotfix/vX.Y.Z` in these instructions: the worktree start point (`git worktree add ../.factory-worktrees/api-<n> -b factory/<n>-<slug> origin/hotfix/vX.Y.Z`), the merge-base for the affected tests, and any rebase. Open the PR with `--base hotfix/vX.Y.Z`. Never push to the hotfix branch itself (the hook blocks it).
+2. **The regression test fails on the hotfix base** (what prod runs), and passes with your fix.
+3. **The smallest change that stops the harm.** No contract edits, no new packages, no refactors or clean-ups (list those under "Follow-ups" in the PR). Only an additive, backward-compatible migration, and only if there is no other way: say why in the PR. Update `CODEMAP.md` only if you added a file it should list.
+4. If the fix can't stay that small (it needs a contract, UI-SPEC or breaking schema change), it isn't a hotfix. Comment `Not a hotfix: needs <what>; roll back instead` on the issue, add `factory:blocked`, and stop.
+5. **PR:** title `[HOTFIX vX.Y.Z][BUG-NNN] <symptom>`. The body starts with `Hotfix: vX.Y.Z`, and keeps `Closes #<n>`, `Root cause:`, `Regression test:` and `Fixes: BUG-NNN`. (GitHub closes the issue only when the back-merge reaches `main`; that's expected.)
+
+## Backport mode (`mode: backport`)
+
+The hotfix is merged on `hotfix/vX.Y.Z`. You bring the same fix to `main`. Your prompt lists the merged hotfix PRs and their merge commits. This replaces Workflow steps 1–5; steps 6–8 (commit, PR, clean-up) still apply.
+
+1. **Worktree from `main`:** `cd <api clone> && git fetch origin && git worktree add ../.factory-worktrees/api-<n> -b factory/<n>-backport origin/main`, then `git config rerere.enabled true`.
+2. **Cherry-pick** each merge commit in order: `git cherry-pick -x <sha>`. If a commit has two parents (`git rev-list --parents -n 1 <sha>` prints three shas), it's a merge commit: use `git cherry-pick -x -m 1 <sha>`.
+3. **Conflicts:** list them with `git diff --name-only --diff-filter=U`. During a cherry-pick, `--ours` is your branch (**main**) and `--theirs` is the **hotfix commit**.
+   - `Migrations/*`: if the hotfix added a migration, **stop**: comment on the issue that the migration order between the hotfix and `main` needs a decision, add `factory:blocked`, and return.
+   - `CODEMAP.md`: keep both rows, alphabetical.
+   - Code: keep main's surrounding code, and re-apply the fix's intent. Read only the conflicted hunks.
+   - Then `git cherry-pick --continue`.
+4. **Already on main?** If a pick is empty (`git cherry-pick --skip`) and every pick was empty, comment `Already on main: <commit>` on the issue, remove the worktree, and return without a PR.
+5. **Verify** as in Workflow, with the merge-base against `origin/main`: the affected tests, which must include the regression test from the hotfix, plus the tests for any code you changed while resolving conflicts.
+6. **PR to `main`:** title `[BUG-NNN] back-merge hotfix vX.Y.Z`. Body: `Closes #<n>`, `Back-merge of hotfix vX.Y.Z: #<hotfix pr>`, the cherry-picked commits, each conflict you resolved and how, and the test summary.
+
 ## Change requests
 
 If the issue body contains `Change request: CR-NNN` and your prompt names a CR contract, that file (`docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml`) is the **binding contract**. It is the full contract, including the baseline. The CR's own `ARCHITECTURE.md`, `UI-SPEC.md` and `TEST-PLAN.md` deltas sit next to it; read them together with the main docs. Everything else in your instructions applies unchanged.
@@ -136,7 +161,7 @@ Use this mode when your prompt says `Mode: spike EXP-NNN`. You are **proving tha
 
 ## Hard rules
 
-- Never edit anything in the product repo (`docs/factory/**`, `.factory/**`). Never merge, never approve, never push to `main`.
+- Never edit anything in the product repo (`docs/factory/**`, `.factory/**`). Never merge, never approve, never push to `main` or to a `hotfix/*` branch.
 - **Contract wrong or incomplete? Stop.** Comment on the issue with the exact gap and a proposed contract change, add the `factory:blocked` label, and return. The contract changes only through the Architect and re-approval.
 - Don't add NuGet packages that aren't implied by the stack profile or an ADR. If one seems necessary, propose it in the PR. (Spike mode: the brief decides; list what you added.)
 - Stay inside the task's scope. List anything else under "Follow-ups" in the PR.

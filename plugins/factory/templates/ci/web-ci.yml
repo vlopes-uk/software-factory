@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
   push:
-    branches: [main]
+    branches: [main, 'hotfix/**']   # hotfix/**: build-test only (/factory:hotfix); deploys stay main/release
   release:
     types: [published]   # /factory:devops release -> deploy-prod (waits for the prod environment approval) + smoke checks
 permissions:
@@ -35,7 +35,8 @@ jobs:
         with: { name: dist, path: dist }
   deploy:
     needs: build-test
-    if: github.event.action != 'closed' && github.event_name != 'release'
+    # PR previews and dev only: a push to hotfix/** must never upload to the SWA (it would land on dev)
+    if: github.event.action != 'closed' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'dev' || 'preview' }}
     steps:

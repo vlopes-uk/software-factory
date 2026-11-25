@@ -27,6 +27,8 @@ Present the gate output above as-is: the main baseline table, then the change re
 
 If the user wants to add a new feature, point them to `/factory:change new <title>`.
 
+**Hotfixes:** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks hotfix`. If it lists open hotfixes, report them first, in one or two lines, with the next step (`/factory:build <ref>`, `/factory:hotfix release` or `/factory:hotfix backport`). A `BACKPORT PENDING` line means the fix is in prod (or about to be) but not on `main`: say that `/factory:devops release` is blocked until the back-merge lands. Say nothing when there are none.
+
 If the build phase is `ready`, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks list` and summarise the open tasks by status (READY / WAITING / IN-REVIEW / BLOCKED / GATED), grouped by story. Then suggest `/factory:build next`, or `/factory:build story S-NN` for a story whose tasks are all ready.
 
 ## Time: estimates, spent, remaining

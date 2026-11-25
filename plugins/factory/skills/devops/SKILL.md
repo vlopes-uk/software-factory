@@ -3,7 +3,7 @@ name: devops
 description: DevOps for GitHub + Azure. `plan` writes OPERATIONS.md (approved with architecture); `setup` bootstraps Azure/GitHub once; `preview` shows Bicep what-if; `release` ships one product version to prod, api then web, each verified; `diagnose` investigates failed runs.
 disable-model-invocation: true
 arguments: mode scope
-argument-hint: "plan [CR-NNN] | setup | preview <dev|prod> | release | diagnose [run-url | api | web]"
+argument-hint: "plan [CR-NNN] | setup | preview <dev|prod> | release | diagnose [run-url | api | web]   (urgent prod fixes: /factory:hotfix)"
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(az account show*) Bash(az deployment group what-if *) Bash(gh run list *) Bash(gh run view *) Bash(gh run watch *) Bash(gh variable list *) Bash(curl -fsS *) Bash(az monitor app-insights query *) Bash(git -C *) Bash(gh pr list *) Bash(gh release list *) Bash(gh release view *) Bash(gh workflow list *) Bash(gh api repos/*/environments*) Read Write Edit Glob Grep
 ---
 
@@ -58,6 +58,7 @@ Precondition: architecture is approved (`OPERATIONS.md` exists). The user has ru
      - creates the `dev` and `prod` environments in both code repos, with `prod` requiring the human as reviewer (`gh api -X PUT repos/<r>/environments/prod ...`)
      - sets **environment-level variables** (separate values for `dev` and `prod`) with `gh variable set --env <env>`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RG`, app names, and the public URLs the smoke checks use: `API_URL` (api repo) and `WEB_URL` (web repo)
      - adds **branch protection** on `main` (PR + 1 review + required CI checks) with **`strict: false`** ("require branches to be up to date" off), so PRs that are only behind `main` never need a rebase. If the repo's plan supports it, offer a **merge queue** instead (rulesets); never turn on strict mode
+     - adds a **ruleset on `hotfix/**`** with the same rules as `main` (PR + 1 review + required checks, no direct pushes), so `/factory:hotfix` branches change only through reviewed PRs
      - stores no secrets, except the Static Web Apps deployment token if the SWA setup needs one (fetched and piped straight into `gh secret set`, never displayed)
 3. Walk the user through the scripts section by section. Offer to run them **one command at a time** via the permission prompt, or let the user run them. Record the resulting non-secret IDs in `ops/README.md`.
 4. Finish with a checklist of what now exists, plus the next step: run the walking-skeleton tasks (`/factory:build api#1`, `/factory:build web#1`).
@@ -81,6 +82,7 @@ Compare each repo with `${CLAUDE_PLUGIN_ROOT}/templates/ci/` and the stack profi
 - CI is green on `main` in both repos (`gh run list --branch main --limit 3 --json conclusion,headSha,url`).
 - **Dev runs `main`:** `curl -fsS <dev API_URL>/health/version` and `<dev WEB_URL>/version.json` equal each repo's `main` sha, and the latest dev smoke steps passed.
 - No open PRs labelled `factory:blocked`, and no open `bug` issues labelled `severity:critical` or `severity:high`.
+- **No hotfix is waiting for its back-merge:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks hotfix` shows no open hotfix task. Otherwise `main` lacks a fix that prod already has, and this release would bring the bug back. Point to `/factory:hotfix backport` (or `/factory:hotfix status`).
 - **Migrations:** list EF migrations added since the last release tag (`git -C <api clone> diff --name-only <last tag>..origin/main -- '**/Migrations/*'`). For each one, check that its PR says it is backward compatible or has a rollback plan. Otherwise ⚠️: name it, and ask the human to confirm before going on.
 
 ### 3. Release plan (then wait for "go")
