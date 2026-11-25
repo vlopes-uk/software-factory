@@ -9,6 +9,6 @@ Part of a software factory. Specs live in **<owner>/<product>-product** (`docs/f
 - Forms: React Hook Form + Zod. Routing: React Router.
 - Tests: Vitest + React Testing Library + user-event, with MSW for the network; Playwright + `@axe-core/playwright` for e2e and accessibility.
 - `e2e/smoke.spec.ts` (`@smoke`) runs against dev and prod after deploys. Keep it **read-only**: load screens, assert real API reads succeed, and never submit or create anything. Add a smoke test when you add a key screen.
-- Before every commit: `npm run lint && npm run typecheck && npm test -- --run && npm run build`.
+- Before every commit: `npm run lint && npm run typecheck && npm run i18n:check && npm run build`, then the **affected tests** only: `npx vitest related --run --maxWorkers=3 <changed source files>` plus the test files you changed. Never the full suite: CI is the full-suite gate.
 - Branches are `factory/<issue>-<slug>`; commits are conventional; PRs contain `Closes #<issue>`.
 - `CODEMAP.md` at the repo root says where everything lives. Read it first, and update it in the same PR when you add or move a feature or key file.

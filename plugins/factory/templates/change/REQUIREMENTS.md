@@ -4,6 +4,7 @@
 | --- | --- |
 | Baseline | `docs/factory/01-requirements/PRD.md` as approved on <date> |
 | Requested by | <human> |
+| Version | <X.Y.Z this change ships as> |
 | Last revised | YYYY-MM-DD |
 
 ## 1. Why

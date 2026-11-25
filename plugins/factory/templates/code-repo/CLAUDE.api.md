@@ -7,6 +7,6 @@ Part of a software factory. Specs live in **<owner>/<product>-product** (`docs/f
 - Errors: RFC 9457 ProblemDetails. Validation: FluentValidation. Config: `IOptions<T>`. Secrets: Key Vault or user-secrets, never committed.
 - Tests: xUnit + Moq. Mocks are created in the test class constructor; names follow `Method_Scenario_ExpectedResult`. Integration tests use `WebApplicationFactory<Program>` + Testcontainers.
 - `/health/live`, `/health/ready` and `/health/version` are used by deploy smoke checks and releases. Keep them fast and dependency-light, and never remove them.
-- Before every commit: `dotnet build -warnaserror && dotnet format --verify-no-changes && dotnet test`.
+- Before every commit: `dotnet build -warnaserror && dotnet format --verify-no-changes`, then the **affected tests** only: `dotnet test --no-build --filter` on the feature namespaces you touched plus the guard tests (`ContractConformanceTests`, `AuthorizationTests`, `BodyBindingTests`). Never the full suite: CI is the full-suite gate.
 - Branches are `factory/<issue>-<slug>`; commits are conventional; PRs contain `Closes #<issue>`.
 - `CODEMAP.md` at the repo root says where everything lives. Read it first, and update it in the same PR when you add or move a feature or key file.

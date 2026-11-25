@@ -25,5 +25,9 @@ Depends on owner/<product>-api#<n>, owner/<product>-web#<n>
 - ...
 
 **Size:** S | M · **Parallel with:** T-NN
+**Estimate:** agent <n>h · human <n>h
+<!-- agent = the factory's dev + QA + fix rounds, calibrated with `gate time calibration`; human = what an experienced human developer would need.
+     Never edit this line later. A re-estimate (review mode, scope change) adds a line below it:
+     **Revised estimate:** agent <n>h · human <n>h (<date>: <reason>) -->
 
 <!-- factory: owned by Architect (planning); source docs/factory/04-plan/PLAN.md in the product repo -->

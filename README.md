@@ -79,7 +79,8 @@ cd ~/code/myapp-product && claude
 | **Model per role** | Planning roles (PO, Architect, Designer, planning, bug triage) and `/factory:build` orchestration use your session model. BE/FE developers and the QA reviewer run on **Sonnet, medium effort**. `/factory:status` uses Sonnet and `/factory:autonomy` uses Haiku. Change it with `model:` / `effort:` in `agents/*.md` or `skills/*/SKILL.md`. |
 | **Spec pack** | `bash <plugin>/scripts/gate spec api#12` prints only what that task references: its story ACs, the contract operations plus the schemas they use, the `§N` architecture sections, ADRs, `SCR-NN` screens and `TC-NNN` test rows. The open CR's docs come first. Developers and QA read the pack, and open full docs only for items listed under MISSING. |
 | **Incremental QA** | Every QA review records `Reviewed commit: <sha>`. A re-check after a fix reviews only the diff since then plus the rows that were ❌/⚠️, carrying ✅ rows over. |
-| **Quiet output** | Agents run `dotnet` and `npm` in quiet mode, read failures only, run focused tests while working, and run the full suite once. `gh` calls use `--json` with only the fields needed. |
+| **Quiet output** | Agents run `dotnet` and `npm` in quiet mode, read failures only, and run focused tests while working. `gh` calls use `--json` with only the fields needed. |
+| **CI is the full-suite gate** | Developers and QA never run the full suite locally (CI runs on a self-hosted runner on the same machine, and parallel local full runs made CI time out). Their final check is the **affected tests**: api `dotnet test --filter` on the touched feature namespaces plus the guard tests; web `vitest related` on the changed files, with `--maxWorkers=3`; widened to importers when shared code changes. QA waits for the PR's CI (up to ~40 min) and classifies each failure as real (changes requested) or load (re-run, not a blocker). `/factory:build` marks a PR ✅ only when CI has no real failure; a real CI failure costs a fix round. |
 | **Code map** | Each code repo keeps a short `CODEMAP.md` (created by the walking skeletons, updated in PRs, checked by QA), so agents go straight to the right files instead of searching. |
 
 Tip: start a fresh Claude Code session between build runs. All state lives in the repos, so nothing is lost. Measure with `/cost` or `/usage`.
@@ -145,6 +146,42 @@ Every `/factory:status` and `/factory:build` first runs `gate.py tasks sync --ap
 - each close or reopen leaves a comment saying why. Stories without tasks are left alone.
 
 Preview without changing anything: `bash <plugin>/scripts/gate tasks sync`.
+
+## Estimates, time spent and learning
+
+**How long will it take?** `/factory:plan` gives every task an estimate in two units, written in the issue body and in PLAN.md (§2 per task, §3 totals per milestone and story):
+
+```
+**Estimate:** agent 2h · human 6h
+```
+
+- **agent**: hours the factory's agents spend on the task: developer + QA review + fix rounds. These are measured.
+- **human**: what an experienced human developer would need, for comparison. Nobody builds the task by hand, so after each PR the QA reviewer re-estimates this from the finished work (`Human-dev estimate (after the work): 7h` in the review). The gap shows how far the plan's sense of scope was off.
+
+**Where am I?** `/factory:build` (and the developer and QA agents themselves) record when each stage starts and stops: `gate time start|stop <task> <dev|qa|fix>`. That goes into `.factory/timelog.jsonl`, which only the gate writes (the hook blocks direct edits). `/factory:build` commits it in the product repo at the end of each run (only that file), because it is the product's estimation history. `/factory:status` then shows:
+- tasks done, hours spent vs estimated, and hours still needed, both by estimate and as a **calibrated forecast**
+- the biggest deviations, and which stage the extra time went to (dev, QA or fix rounds)
+- open tasks already over their estimate, and tasks currently running
+
+The build's final report also shows estimate → actual per task.
+
+**Your manual QA checks.** The manual checks in the test plans (MAN-NN: real phones, screen readers, reading the translations) are your time, and they're tracked the same way, kept apart from agent hours. `/factory:qa plan` gives each one a "Your hours" estimate. You time them yourself:
+
+```text
+/factory:qa manual                    # your checks: to do / in progress / failed / passed, estimate, time left
+/factory:qa manual start MAN-21       # timer on
+/factory:qa manual done MAN-21 pass   # timer off (or: fail <what went wrong>)
+/factory:qa manual log MAN-22 45m     # if you forgot the timer
+/factory:qa manual estimate MAN-23 1h # add or change an estimate
+```
+
+A failed check counts its full estimate again until it passes. MAN ids repeat across change requests; write `CR-009/MAN-21` when the gate says an id is ambiguous. Checks are tracked for open change requests (and the baseline before the first CR merges), or as soon as they have an estimate or time recorded.
+
+**Learning.** `gate time calibration` computes, per product, how actual agent time compares with the estimate (median actual/estimate) per category: `be|fe` / `feature|ops|sync|skeleton|bug` / `S|M`. Your manual checks have their own `manual` category. A category needs 3 finished items before it is used; until then the broader category applies, then `all`, then no correction. `/factory:plan` and `/factory:bug` read these factors plus recent similar tasks before estimating, so new estimates build on what really happened. Forecasts use the same factors. Re-estimates never overwrite the original line: review mode adds `**Revised estimate:** … (<date>: <reason>)`, so scope changes and estimating errors can be told apart.
+
+**Dashboard.** `gate time export` (run automatically by `/factory:status` and `/factory:build`) writes `~/.factory/metrics/factory.db`. `dashboard/` in this repo holds a ready-made Grafana for it: `cd dashboard && docker compose up -d`, then http://localhost:3000. It shows your hours and agent hours (estimate, spent, remaining, forecast), one Tasks table with factory tasks and manual checks that you can filter by version, status and type, and a burn-down. A change request's version comes from its `Version` field (or "Version X.Y.Z" in its title). See `dashboard/README.md`.
+
+Commands: `gate time report [all|main|CR-NNN]`, `gate time manual`, `gate time calibration`, `gate time unlogged` (closed tasks with no recorded time), `gate time export`.
 
 ## DevOps (GitHub + Azure), kept lean
 
@@ -266,6 +303,7 @@ Use an exploration when you have an idea but don't know whether the app can do i
   - any model-initiated `gate.py approve`, or `gate.py explore reject`
   - writes into closed or unregistered explorations, and PoC docs before the approach is approved
   - PRs, merges, cherry-picks or pushes to `main` from `spike/EXP-*` branches
+  - direct writes to `.factory/timelog.jsonl` (time records go only through `gate time`)
 - If you edit an approved doc, that phase becomes `changed`. Re-approving it marks every downstream phase `stale`. Both states block the phases that depend on them.
 - `/factory:approve` works only for you, because its `!` injection runs outside the tool pipeline and the skill has `disable-model-invocation: true`.
 - For team use, add GitHub branch protection plus a CODEOWNERS entry on `docs/factory/` and `.factory/`, so approvals are also reviewed in PRs.
@@ -274,5 +312,6 @@ Use an exploration when you have an idea but don't know whether the app can do i
 
 ```bash
 python3 plugins/factory/tests/test_gate.py
+python3 plugins/factory/tests/test_timelog.py
 claude plugin validate ./plugins/factory
 ```

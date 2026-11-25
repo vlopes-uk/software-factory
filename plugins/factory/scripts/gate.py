@@ -37,6 +37,8 @@ Usage:
   gate.py spec <api#N | web#N>            spec pack: only the spec excerpts that task references
   gate.py tasks list|next|story S-NN|plan <target> [x]
                                           task readiness for /factory:build (see tasks.py)
+  gate.py time start|stop <task> <dev|qa|fix> | human <task> <hours> | report [scope] | calibration | export
+                                          estimates vs agent time, forecast, learning (see timelog.py)
   gate.py review <phase> [--scope CR-NNN] diff of upstream docs since this phase was approved
                                           (from approval snapshots; git history as fallback)
 """
@@ -1262,6 +1264,9 @@ def main(argv: list[str]) -> None:
         cmd_change(pos)
     elif cmd == "explore":
         cmd_explore([a for a in argv[1:] if a.strip()])
+    elif cmd == "time":  # estimates, time spent, calibration, Grafana export (see timelog.py)
+        import timelog
+        timelog.cmd(argv[1:])
     elif cmd == "tasks":  # task readiness for /factory:build (reads GitHub via gh)
         import tasks
         tasks.cmd(argv[1:])

@@ -17,6 +17,10 @@ allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(gh issue *
 
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" config`
 
+## Estimation history (this product)
+
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time calibration`
+
 The user's input: $ARGUMENTS
 
 ## Review mode (when upstream documents changed)
@@ -37,6 +41,7 @@ Use this mode if the user's input contains the word `review`, for example `/fact
    - For **closed or merged** tasks whose behaviour must change, create a **new follow-up task**; never reopen history.
    - For tasks that are no longer needed, propose closing them with a comment, and close them only after the user's "go".
    - Re-check the dependency graph and the build order.
+   - **Estimates:** for a modified open task whose scope changed, propose a revised estimate (calibrated as in *Estimates* below). Never edit the original `**Estimate:**` line: add `**Revised estimate:** agent <n>h · human <n>h (<date>: <reason>)` under it, and update the PLAN.md row and totals. New tasks get a normal estimate.
 4. **Wait for an explicit "go"**, or for the user's answers to any `question` rows.
 5. **Apply targeted edits** to the affected sections only. Never regenerate the document. Add a line under a `## Revision history` heading at the end of PLAN.md and the task issues: `<date>: review after <upstream> change, <one-line summary>`.
 6. **Hand off:** "Review the edits (`git diff`), then `/factory:approve [CR-NNN] planning`." If you found a problem in the upstream document itself, report it and point the user to that role's `revise`, rather than working around it.
@@ -81,11 +86,16 @@ You turn the approved requirements, architecture (including `openapi.yaml`) and 
 - **Hotspot sequencing (fewer rebases).** Two tasks that touch the same screen, feature folder, shared component, EF entity/migration or `tokens.css` must not run in parallel: add a `Depends on` from the later to the earlier, even without a functional dependency, and note `(sequenced: shared <thing>)`. Self-registration means routes, MSW handlers, endpoint registration and DI are **not** hotspots.
 - **Every task names** its spec refs precisely, because the developers' spec pack is built from them: operationIds in backticks on a line containing "operationIds", `§N` for ARCHITECTURE sections, `ADR NNNN`, `SCR-NN` screens and `TC-NNN` test cases (once the test plan exists). It also names the story and AC numbers it satisfies (`Implements <product>#<story> (ACs: AC1, AC2)`).
 - **Dependencies** form a DAG across both repos and use full refs: `Depends on owner/repo#N`.
+- **Estimates.** Every task gets `**Estimate:** agent <n>h · human <n>h` in its issue body (under the Size line), and the same numbers in PLAN.md (§2 column, §3 totals per milestone and story, with the overall total).
+  - **agent** = wall-clock hours of the factory's agents on the task: developer + QA review + the fix rounds you expect. Start from the size and similar finished tasks in the *Estimation history* above, then multiply by the calibration factor of the most specific category with enough samples (`be|fe/feature|ops|sync|skeleton|bug/S|M`). Write the calibrated number, and in PLAN.md §3 state which factors you applied. With no history, say "uncalibrated".
+  - **human** = hours an experienced human developer would need for the same task (coding, tests, review fixes). If the history shows QA's after-the-fact human estimates running above or below plan, adjust the same way.
+  - Use 0.25h steps under 2h, 0.5h steps above. No ranges in the issue line; put doubts in the task's notes.
+  - Every task in PLAN.md has a Milestone (M0, M1, …), because progress is reported per milestone.
 
 ## Process
 
 1. Draft the task breakdown and build order (milestones and parallel waves) in `PLAN.md`, with a Mermaid dependency graph that has a lane per repo.
-2. Show the user a summary table (ID, repo, title, size, depends on) and iterate.
+2. Show the user a summary table (ID, repo, title, size, estimate agent · human, milestone, depends on), the totals per milestone and overall ("how long will it take"), and iterate.
 3. After an explicit "go", create the issues in dependency order with `gh issue create --repo <repo>`. Bodies reference `Implements <product repo>#<story>` and `Depends on <owner/repo>#<n>`. On a revision, edit existing issues (matched by `[T-NN]` in the title) instead of duplicating them.
 4. Comment on each story issue in the product repo with a checklist of its task issues, using full refs.
 5. Write the issue refs back into `PLAN.md`.
