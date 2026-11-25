@@ -98,8 +98,15 @@ Each command still goes through the permission prompt.
 
 ### 4. For each repo that ships (api first)
 1. **Create the release** with the command from the plan.
-2. **Find its run:** `gh run list --repo <r> --event release --limit 3 --json databaseId,url,status,headBranch`. Pick the run for the new tag.
-3. **Hand over the approval:**
+2. **How does this repo deploy prod?** Read its `.github/workflows/` once:
+   - **On release** (the template: a `deploy-prod` job under `on: release`). Find its run: `gh run list --repo <r> --event release --limit 3 --json databaseId,url,status,headBranch`, and pick the run for the new tag.
+   - **Started by hand** (a `workflow_dispatch` workflow with `environment: prod` and a tag input, for example `deploy-prod.yml`, often with a separate release-build workflow that attaches the package). First wait for the release's own runs to succeed (`gh run list --repo <r> --event release --limit 3 --json databaseId,workflowName,status,conclusion,url`). Then the human starts the deploy; you can't, because the hook blocks `gh workflow run` for prod. Read the workflow's `inputs:` and give the exact values:
+
+     > ⏸ **Start `<workflow>` for <repo> vX.Y.Z:** Actions → <workflow> → Run workflow on `main`, with `tag: vX.Y.Z`, `confirm: vX.Y.Z` (…every required input). Or in a terminal: `gh workflow run <file> --repo <r> --ref main -f tag=vX.Y.Z -f confirm=vX.Y.Z`.
+
+     Then find the run: `gh run list --repo <r> --workflow <file> --limit 3 --json databaseId,url,status,createdAt`.
+   - If the workflow stops on **its own pre-checks** before any Azure step (for example a required security scan or a schema boundary), relay its error and the instructions it prints. It changed nothing; repeat this step once the human has dealt with it.
+3. **Hand over the approval** (when the `prod` environment requires a reviewer):
 
    > ⏸ **Approve `deploy-prod` for <repo> vX.Y.Z in GitHub:** <run url> (Review deployments → prod → Approve).
 
@@ -109,7 +116,7 @@ Each command still goes through the permission prompt.
    - The run's smoke step passed (the api's version and `/health/ready`; the web's `/version.json` and the `@smoke` Playwright specs). On failure, read `gh run view <id> --repo <r> --log-failed | tail -n 60`.
    - Check it yourself: `curl -fsS <prod API_URL>/health/version` (or `<prod WEB_URL>/version.json`) equals `vX.Y.Z`.
    - **Error rate** (if Application Insights is configured), read-only: failed requests and exceptions over the 10 minutes after the deploy, compared with the 10 minutes before. For example, `az monitor app-insights query --app <name> -g <rg> --analytics-query "requests | where timestamp > ago(20m) | summarize total=count(), failed=countif(success == false) by bin(timestamp, 10m)"`. ⚠️ if the failure rate more than doubles or goes above the 5xx alert threshold in OPERATIONS.md.
-6. **If it fails:** stop. Don't release the next repo. Report the evidence, and propose a rollback: re-run the previous release's `deploy-prod` job (`gh run rerun <previous release run id> --repo <r> --job <deploy-prod job id>`, run only after "go"). That run also waits for the human's approval. Mention any migration that can't simply be rolled back.
+6. **If it fails:** stop. Don't release the next repo. Report the evidence, and propose a rollback. For a repo that deploys on release, re-run the previous release's `deploy-prod` job (`gh run rerun <previous release run id> --repo <r> --job <deploy-prod job id>`, run only after "go"). For a repo that deploys by hand, the human starts its deploy workflow with the previous tag (same inputs as above). Either way, the run waits for the human's approval. Mention any migration that can't simply be rolled back, and anything the workflow already reverted by itself.
 
 ### 5. Wrap up
 - **Summary table:**

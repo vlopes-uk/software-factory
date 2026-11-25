@@ -56,7 +56,11 @@ You are the release engineer on call. Production is hurting, so be fast. Being c
 Recommend one, with the evidence, and let the human decide.
 - **When did it start?** Compare when the bug was first seen (App Insights, read-only, if configured: `az monitor app-insights query ...` for the failing request or exception over the last days) with P's release date in `ops/RELEASES.md`.
 - **Rollback is usually best** when the bug arrived with P and the previous release (call it P-1) didn't have it. Check that it's safe: no EF migration since P-1 that isn't backward compatible (`git -C <api clone> fetch origin --tags && git -C <api clone> diff --name-only <P-1>..<P> -- '**/Migrations/*'`, then read each migration PR for its compatibility note).
-  - **To roll back:** find P-1's release run (`gh run list --repo <r> --event release --limit 10 --json databaseId,headBranch,conclusion,url`; for release runs, `headBranch` is the tag) and its `deploy-prod` job id (`gh run view <id> --repo <r> --json jobs`). Then, after "go": `gh run rerun <id> --repo <r> --job <job id>`. Give the human the approval link (⏸ **Approve `deploy-prod` for <repo> <P-1> in GitHub:** <url>). Watch it with `gh run watch`, then verify that prod reports P-1 and that the smoke step passed. Roll back the api first, then web, and only the repos that need it.
+  - **To roll back,** check how the repo deploys prod (see "How does this repo deploy prod?" in the devops skill, below).
+    - **On release:** find P-1's release run (`gh run list --repo <r> --event release --limit 10 --json databaseId,headBranch,conclusion,url`; for release runs, `headBranch` is the tag) and its `deploy-prod` job id (`gh run view <id> --repo <r> --json jobs`). Then, after "go": `gh run rerun <id> --repo <r> --job <job id>`.
+    - **Started by hand:** the human starts the deploy workflow with `tag` = P-1 (give the exact inputs from its `inputs:`).
+
+    Give the human the approval link (⏸ **Approve `deploy-prod` for <repo> <P-1> in GitHub:** <url>). Watch it with `gh run watch`, then verify that prod reports P-1 and that the smoke step passed. Roll back the api first, then web, and only the repos that need it.
   - After a rollback the bug still lives on `main`. File it as a normal bug fix: the draft from step 2 without the hotfix line and label, created after "go" (or leave the existing issue as it is). It ships with the next release. No hotfix branch is needed. Add a "rolled back" entry to `ops/RELEASES.md` and stop.
 - **Fix forward** when the bug is older than P, when a rollback would undo a migration or something users already rely on, or when the human prefers it. Continue with step 4.
 
@@ -99,6 +103,9 @@ You drive it; the human says "go" to the plan and approves each `deploy-prod` in
 - **The branch holds only the fix:** `git -C <clone> fetch origin --tags` and `git -C <clone> log --oneline <P>..origin/hotfix/<H>` list only the hotfix PRs. `git -C <clone> diff --stat <P>..origin/hotfix/<H>` touches no `contracts/openapi.yaml`. Any migration in it must be backward compatible (its PR says so), or ⚠️ and the human confirms.
 - **CI is green:** `gh run list --repo <r> --branch hotfix/<H> --limit 3 --json conclusion,headSha,url` for the branch head. If the repo has no push trigger for `hotfix/**`, use the merged PRs' checks instead (`gh pr checks <pr> --repo <r>`), and check that the branch head is the last PR's merge commit (`gh pr view <pr> --repo <r> --json mergeCommit`).
 - **QA passed** on each hotfix PR (the `qa:passed` label, or the human confirms that they reviewed it themselves).
+- **Where the prod deploy takes its infrastructure from:** read the repo's prod deploy workflow. If it checks out `main` (not the tag) and then runs Bicep, compare `git -C <clone> diff --stat <P>..origin/main -- infra/`. Empty: fine. Not empty: `main` has unreleased infrastructure changes that would reach prod with the hotfix.
+  - If the workflow has an input to choose (for example `infraFrom: tag`), the plan uses it.
+  - If it has none, ⚠️: name the changed files and let the human decide (accept them, or deploy the app from the hotfix and keep the infra change for the next release, if the workflow allows it).
 - Dev is **not** checked: it runs `main`, not the hotfix. Say so in one line. The fix was verified on its PR (CI, QA, and the SWA preview for web).
 
 ### 2. Plan (then wait for "go")
@@ -107,7 +114,7 @@ You drive it; the human says "go" to the plan and approves each `deploy-prod` in
 - **Order:** api first, then web.
 
 ### 3. Ship each repo (api first)
-Read `${CLAUDE_PLUGIN_ROOT}/skills/devops/SKILL.md`, section **"4. For each repo that ships"**, and follow it exactly: create the release, find its run, hand over the approval link, follow the run, and verify in prod (the smoke step, the version equals H, the error rate before vs. after). If a check fails: stop, don't ship the next repo, and propose rolling back to P (the previous release's `deploy-prod`, re-run after "go").
+Read `${CLAUDE_PLUGIN_ROOT}/skills/devops/SKILL.md`, section **"4. For each repo that ships"**, and follow it exactly: create the release, start or find the deploy (on release, or started by hand with the exact inputs, including the infrastructure choice from the readiness check), hand over the approval link, follow the run, and verify in prod (the smoke step, the version equals H, the error rate before vs. after). If a check fails: stop, don't ship the next repo, and propose rolling back to P, the same way.
 
 **Then check the bug itself** is gone in prod, when that can be done read-only (for example a `GET` that used to fail). If it can't be checked read-only, give the human the issue's reproduction steps to confirm, and wait for their answer.
 
