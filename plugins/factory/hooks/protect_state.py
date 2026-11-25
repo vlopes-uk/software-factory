@@ -21,6 +21,9 @@ Blocks (exit 2, reason on stderr):
   7. spike branches (spike/EXP-NNN-*): no PR, no merge/cherry-pick/pull of them, no push to main.
   8. .factory/timelog.jsonl (time spent per task): written only through `gate time ...`, never
      edited directly, so the actuals used for deviations and learning can't be massaged.
+  9. hotfix branches (hotfix/vX.Y.Z): changed only through reviewed PRs, so nothing is pushed to them
+     directly. A PR into a hotfix branch (`gh pr create --base hotfix/...`) is allowed even when no
+     build phase is open: it fixes production against the already-approved specs.
 Applies to the main session and to subagents alike.
 """
 import json
@@ -149,6 +152,11 @@ if tool == "Bash":
     if re.search(r"\bgh\s+pr\s+(create|merge)\b", cmd) and (
             re.search(r"\bspike/", cmd) or branch_of(cmd, event.get("cwd", "")).startswith("spike/")):
         block(spike_msg)
+    # Hotfix branches ship to prod: they change only through reviewed PRs (the skill creates them
+    # from the release tag with `gh api .../git/refs`, never with a push).
+    if re.search(r"\bgit\s+push\b[^|;&]*(?:[\s:+]|refs/heads/)hotfix/", cmd):
+        block("Blocked: hotfix/* branches change only through reviewed PRs. Push your own "
+              "factory/<n>-<slug> branch and open the PR with --base hotfix/vX.Y.Z.")
     if re.search(r"\bgate(?:\.py)?[\"']?\s+autonomy\s+(set|preset)\b", cmd):
         block("Blocked: build autonomy is the human's decision. Ask the user to run "
               "/factory:autonomy themselves.")
@@ -186,7 +194,8 @@ if tool == "Bash":
             for phase in gate.DOC_PHASES:
                 if re.search(rf"\b{re.escape(gate.PHASES[phase]['dir'])}\b", rest):
                     check_target(gate, state, phase, gate.MAIN, "shell-write")
-        if re.search(r"\bgh\s+pr\s+create\b", cmd):
+        hotfix_pr = re.search(r"(?:--base|-B)[\s=]+['\"]?hotfix/v\d+\.\d+\.\d+\b", cmd)
+        if re.search(r"\bgh\s+pr\s+create\b", cmd) and not hotfix_pr:
             scopes = [gate.MAIN] + [k for k, v in state.get("changes", {}).items()
                                     if v.get("status") == "open"]
             memo: dict = {}

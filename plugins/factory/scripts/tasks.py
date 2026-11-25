@@ -8,6 +8,7 @@ Reads GitHub (via `gh`) and the local gate state. Run through the gate wrapper:
   bash scripts/gate tasks plan <target> [x]    what /factory:build injects: dispatches on target
                                                (next | story S-NN | api#N | web#N | owner/repo#N)
   bash scripts/gate tasks bug-id               next free BUG-NNN id across the api/web repos
+  bash scripts/gate tasks hotfix               production hotfix tasks (label `hotfix`) and where each stands
   bash scripts/gate tasks sync [--apply]       close stories whose tasks are all closed, and epics
                                                whose stories are all closed (reopen if new open work
                                                appears). Dry run unless --apply.
@@ -16,16 +17,21 @@ Status of a task (first match wins):
   done        issue closed
   blocked     labelled factory:blocked (a developer stopped and asked a question)
   in-review   an open PR references it (Closes #N or branch factory/N-*)
-  gated       the build gate is closed for its scope (main, or its change request)
+  backport    a hotfix (body line `Hotfix: vX.Y.Z`) whose fix is merged into hotfix/vX.Y.Z but not yet
+              on main: release it and back-merge it (/factory:hotfix). GitHub only auto-closes issues
+              for merges into the default branch, so the issue stays open until the back-merge lands.
+  gated       the build gate is closed for its scope (main, or its change request); never for hotfixes,
+              which fix production against the already-approved specs
   waiting     a `Depends on` issue is still open
   ready       none of the above
 
-Ordering for `next`: story priority (must > should > could > none), then the
-plan order (T-number in the title), then the issue number.
+Ordering for `next`: hotfixes first, then story priority (must > should > could > none), then
+the plan order (T-number in the title), then the issue number.
 
 Testing: set FACTORY_GH_FIXTURE=<json> to replace gh with
   {"issues": {"owner/repo": [ {number,title,state,labels:[{name}],body} ]},
-   "prs":    {"owner/repo": [ {number,body,headRefName} ]}}
+   "prs":    {"owner/repo": [ {number,body,headRefName} ]},
+   "merged_prs": {"owner/repo": [ {number,body,headRefName,baseRefName} ]}}   (hotfix branches only)
 """
 from __future__ import annotations
 
@@ -42,6 +48,7 @@ PRIORITY = {"priority:must": 0, "priority:should": 1, "priority:could": 2}
 # medium ranks with "should" stories, low with "could".
 SEVERITY = {"severity:critical": -2, "severity:high": -1, "severity:medium": 1, "severity:low": 2}
 REF = re.compile(r"([\w.-]+/[\w.-]+)#(\d+)")
+HOTFIX = re.compile(r"^\s*Hotfix:\s*(v\d+\.\d+\.\d+)\b", re.M | re.I)
 _fixture: dict | None = None
 
 
@@ -72,6 +79,17 @@ def open_prs(repo: str) -> list[dict]:
         _fixture = _fixture or json.loads(open(os.environ["FACTORY_GH_FIXTURE"], encoding="utf-8").read())
         return {k.lower(): v for k, v in _fixture.get("prs", {}).items()}.get(repo.lower(), [])
     return _gh_json(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200",
+                     "--json", "number,body,headRefName"])
+
+
+def merged_prs(repo: str, base: str) -> list[dict]:
+    """PRs merged into a hotfix branch (only queried when a hotfix task exists)."""
+    global _fixture
+    if os.environ.get("FACTORY_GH_FIXTURE"):
+        _fixture = _fixture or json.loads(open(os.environ["FACTORY_GH_FIXTURE"], encoding="utf-8").read())
+        pool = {k.lower(): v for k, v in _fixture.get("merged_prs", {}).items()}.get(repo.lower(), [])
+        return [p for p in pool if p.get("baseRefName") == base]
+    return _gh_json(["pr", "list", "--repo", repo, "--state", "merged", "--base", base, "--limit", "50",
                      "--json", "number,body,headRefName"])
 
 
@@ -122,8 +140,20 @@ def collect() -> dict:
     tasks, by_ref = [], {}
     for key, repo in code.items():
         prs = open_prs(repo)
+        merged: dict[str, list[dict]] = {}
         for t in issues(repo, "factory:task"):
             body = t.get("body") or ""
+            hf = HOTFIX.search(body)
+            hotfix = hf.group(1) if hf else None
+            hotfix_merged = []
+            if hotfix and t["state"].lower() != "closed":
+                branch = f"hotfix/{hotfix}"
+                if branch not in merged:
+                    merged[branch] = merged_prs(repo, branch)
+                hotfix_merged = [p["number"] for p in merged[branch]
+                                 if re.search(rf"(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?)\s+#{t['number']}\b",
+                                              p.get("body") or "", re.I)
+                                 or (p.get("headRefName") or "").startswith(f"factory/{t['number']}-")]
             m = re.search(r"\[((?:T|BUG)-[\w-]+)\]", t["title"])
             cr = re.search(r"^\s*Change request:\s*(CR-\d{3,})", body, re.M | re.I)
             impl = line_refs(body, "implements")
@@ -145,6 +175,8 @@ def collect() -> dict:
                 "deps": line_refs(body, "depends on"),
                 "implements": impl,
                 "prs": in_review,
+                "hotfix": hotfix,
+                "hotfix_merged": hotfix_merged,
                 "body": body,
                 "createdAt": t.get("createdAt"), "closedAt": t.get("closedAt"),
             }
@@ -176,13 +208,18 @@ def classify(data: dict) -> None:
                 open_deps.append(f"{repo}#{n} (unknown, check it)")
             elif dep["state"] != "closed":
                 open_deps.append(dep["ref"])
-        ok, why = build_open(t["cr"])
+        ok, why = (True, "") if t.get("hotfix") else build_open(t["cr"])
         if t["state"] == "closed":
             t["status"], t["why"] = "done", ""
         elif "factory:blocked" in t["labels"]:
             t["status"], t["why"] = "blocked", "labelled factory:blocked: answer the question on the issue"
         elif t["prs"]:
             t["status"], t["why"] = "in-review", "PR " + ", ".join(f"#{p}" for p in t["prs"])
+        elif t.get("hotfix_merged"):
+            t["status"], t["why"] = "backport", (
+                f"fix merged into hotfix/{t['hotfix']} (PR "
+                + ", ".join(f"#{p}" for p in t["hotfix_merged"])
+                + "), not on main yet: /factory:hotfix release, then /factory:hotfix backport")
         elif not ok:
             t["status"], t["why"] = "gated", why
         elif open_deps:
@@ -194,6 +231,8 @@ def classify(data: dict) -> None:
 def sort_key(t: dict):
     tnum = re.findall(r"\d+", t["tid"])
     rank = SEVERITY[t["severity"]] if t.get("severity") else PRIORITY.get(t["priority"], 3)
+    if t.get("hotfix"):
+        rank = -3
     return (rank, 0 if t.get("severity") else 1, int(tnum[0]) if tnum else 9999, t["tid"], t["number"])
 
 
@@ -275,8 +314,12 @@ def sync(data: dict, apply: bool) -> None:
 def row(t: dict) -> str:
     prio = ("BUG-" + t["severity"].replace("severity:", "")) if t.get("severity") else \
         (t["priority"] or "-").replace("priority:", "")
+    if t.get("hotfix"):
+        prio = "HOTFIX"
     extra = f"  ({t['why']})" if t["why"] else ""
     cr = f" {t['cr']}" if t["cr"] else ""
+    if t.get("hotfix"):
+        cr += f" {t['hotfix']}"
     return (f"  {t['status'].upper():9} {t['ref']:10} {t['tid'] or '-':10} story={t['story'] or '-':6} "
             f"prio={prio:6}{cr}  {t['title']}{extra}")
 
@@ -318,6 +361,13 @@ def cmd(args: list[str]) -> None:
     if sub == "sync":
         sync(data, apply="--apply" in args)
         return
+    if sub == "hotfix":
+        hot = [t for t in tasks if t.get("hotfix") and t["status"] != "done"]
+        show(hot, f"HOTFIXES: {len(hot)} open")
+        pending = [t for t in hot if t["status"] == "backport"]
+        if pending:
+            print("BACKPORT PENDING: " + " ".join(f"{t['ref']}({t['hotfix']})" for t in pending))
+        return
     if sub == "list":
         open_tasks = [t for t in tasks if t["status"] != "done"]
         show(open_tasks, f"TASKS: {len(open_tasks)} open of {len(tasks)}")
@@ -330,6 +380,8 @@ def cmd(args: list[str]) -> None:
         t = ready[0]
         level = (f"bug, {t['severity'].replace('severity:', '')}" if t.get("severity")
                  else (t['priority'] or 'no priority').replace('priority:', ''))
+        if t.get("hotfix"):
+            level = f"HOTFIX {t['hotfix']}, base hotfix/{t['hotfix']}"
         print(f"NEXT: {t['ref']} {t['tid']} (story {t['story'] or '-'}, {level})"
               f"{' ' + t['cr'] if t['cr'] else ''}")
         print(f"  {t['title']}")
@@ -355,6 +407,8 @@ def cmd(args: list[str]) -> None:
             print(f"TASK {target}: not found among open factory:task issues in the api/web repos.")
             return
         show([t], f"TASK {t['ref']}:")
+        if t.get("hotfix"):
+            print(f"HOTFIX: {t['hotfix']}  base branch: hotfix/{t['hotfix']}  (build gate not required)")
     else:
         print(__doc__)
 

@@ -52,6 +52,7 @@ Environment variables per environment: `API_URL`, `WEB_URL` (used by the smoke c
 ## 7. Backups, rollback, recovery
 - DB: <point-in-time restore window>; restore drill: <frequency>.
 - App rollback: re-run the previous release's `deploy-prod` job. A DB migration that isn't backward compatible needs a written rollback plan in its PR.
+- Urgent fix that can't wait for the next release: `/factory:hotfix`. It considers a rollback first, then branches `hotfix/vX.Y.Z` from the prod tag, ships only that fix as a patch release, and back-merges it to `main`.
 
 ## 8. Cost estimate (per month, estimate)
 | Item | dev | prod | Assumption |

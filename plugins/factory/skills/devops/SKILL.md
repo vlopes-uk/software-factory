@@ -3,7 +3,7 @@ name: devops
 description: DevOps for GitHub + Azure. `plan` writes OPERATIONS.md (approved with architecture); `setup` bootstraps Azure/GitHub once; `preview` shows Bicep what-if; `release` ships one product version to prod, api then web, each verified; `diagnose` investigates failed runs.
 disable-model-invocation: true
 arguments: mode scope
-argument-hint: "plan [CR-NNN] | setup | preview <dev|prod> | release | diagnose [run-url | api | web]"
+argument-hint: "plan [CR-NNN] | setup | preview <dev|prod> | release | diagnose [run-url | api | web]   (urgent prod fixes: /factory:hotfix)"
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" *) Bash(az account show*) Bash(az deployment group what-if *) Bash(gh run list *) Bash(gh run view *) Bash(gh run watch *) Bash(gh variable list *) Bash(curl -fsS *) Bash(az monitor app-insights query *) Bash(git -C *) Bash(gh pr list *) Bash(gh release list *) Bash(gh release view *) Bash(gh workflow list *) Bash(gh api repos/*/environments*) Read Write Edit Glob Grep
 ---
 
@@ -58,6 +58,7 @@ Precondition: architecture is approved (`OPERATIONS.md` exists). The user has ru
      - creates the `dev` and `prod` environments in both code repos, with `prod` requiring the human as reviewer (`gh api -X PUT repos/<r>/environments/prod ...`)
      - sets **environment-level variables** (separate values for `dev` and `prod`) with `gh variable set --env <env>`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RG`, app names, and the public URLs the smoke checks use: `API_URL` (api repo) and `WEB_URL` (web repo)
      - adds **branch protection** on `main` (PR + 1 review + required CI checks) with **`strict: false`** ("require branches to be up to date" off), so PRs that are only behind `main` never need a rebase. If the repo's plan supports it, offer a **merge queue** instead (rulesets); never turn on strict mode
+     - adds a **ruleset on `hotfix/**`** with the same rules as `main` (PR + 1 review + required checks, no direct pushes), so `/factory:hotfix` branches change only through reviewed PRs
      - stores no secrets, except the Static Web Apps deployment token if the SWA setup needs one (fetched and piped straight into `gh secret set`, never displayed)
 3. Walk the user through the scripts section by section. Offer to run them **one command at a time** via the permission prompt, or let the user run them. Record the resulting non-secret IDs in `ops/README.md`.
 4. Finish with a checklist of what now exists, plus the next step: run the walking-skeleton tasks (`/factory:build api#1`, `/factory:build web#1`).
@@ -81,6 +82,7 @@ Compare each repo with `${CLAUDE_PLUGIN_ROOT}/templates/ci/` and the stack profi
 - CI is green on `main` in both repos (`gh run list --branch main --limit 3 --json conclusion,headSha,url`).
 - **Dev runs `main`:** `curl -fsS <dev API_URL>/health/version` and `<dev WEB_URL>/version.json` equal each repo's `main` sha, and the latest dev smoke steps passed.
 - No open PRs labelled `factory:blocked`, and no open `bug` issues labelled `severity:critical` or `severity:high`.
+- **No hotfix is waiting for its back-merge:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" tasks hotfix` shows no open hotfix task. Otherwise `main` lacks a fix that prod already has, and this release would bring the bug back. Point to `/factory:hotfix backport` (or `/factory:hotfix status`).
 - **Migrations:** list EF migrations added since the last release tag (`git -C <api clone> diff --name-only <last tag>..origin/main -- '**/Migrations/*'`). For each one, check that its PR says it is backward compatible or has a rollback plan. Otherwise ⚠️: name it, and ask the human to confirm before going on.
 
 ### 3. Release plan (then wait for "go")
@@ -96,8 +98,15 @@ Each command still goes through the permission prompt.
 
 ### 4. For each repo that ships (api first)
 1. **Create the release** with the command from the plan.
-2. **Find its run:** `gh run list --repo <r> --event release --limit 3 --json databaseId,url,status,headBranch`. Pick the run for the new tag.
-3. **Hand over the approval:**
+2. **How does this repo deploy prod?** Read its `.github/workflows/` once:
+   - **On release** (the template: a `deploy-prod` job under `on: release`). Find its run: `gh run list --repo <r> --event release --limit 3 --json databaseId,url,status,headBranch`, and pick the run for the new tag.
+   - **Started by hand** (a `workflow_dispatch` workflow with `environment: prod` and a tag input, for example `deploy-prod.yml`, often with a separate release-build workflow that attaches the package). First wait for the release's own runs to succeed (`gh run list --repo <r> --event release --limit 3 --json databaseId,workflowName,status,conclusion,url`). Then the human starts the deploy; you can't, because the hook blocks `gh workflow run` for prod. Read the workflow's `inputs:` and give the exact values:
+
+     > ⏸ **Start `<workflow>` for <repo> vX.Y.Z:** Actions → <workflow> → Run workflow on `main`, with `tag: vX.Y.Z`, `confirm: vX.Y.Z` (…every required input). Or in a terminal: `gh workflow run <file> --repo <r> --ref main -f tag=vX.Y.Z -f confirm=vX.Y.Z`.
+
+     Then find the run: `gh run list --repo <r> --workflow <file> --limit 3 --json databaseId,url,status,createdAt`.
+   - If the workflow stops on **its own pre-checks** before any Azure step (for example a required security scan or a schema boundary), relay its error and the instructions it prints. It changed nothing; repeat this step once the human has dealt with it.
+3. **Hand over the approval** (when the `prod` environment requires a reviewer):
 
    > ⏸ **Approve `deploy-prod` for <repo> vX.Y.Z in GitHub:** <run url> (Review deployments → prod → Approve).
 
@@ -107,7 +116,7 @@ Each command still goes through the permission prompt.
    - The run's smoke step passed (the api's version and `/health/ready`; the web's `/version.json` and the `@smoke` Playwright specs). On failure, read `gh run view <id> --repo <r> --log-failed | tail -n 60`.
    - Check it yourself: `curl -fsS <prod API_URL>/health/version` (or `<prod WEB_URL>/version.json`) equals `vX.Y.Z`.
    - **Error rate** (if Application Insights is configured), read-only: failed requests and exceptions over the 10 minutes after the deploy, compared with the 10 minutes before. For example, `az monitor app-insights query --app <name> -g <rg> --analytics-query "requests | where timestamp > ago(20m) | summarize total=count(), failed=countif(success == false) by bin(timestamp, 10m)"`. ⚠️ if the failure rate more than doubles or goes above the 5xx alert threshold in OPERATIONS.md.
-6. **If it fails:** stop. Don't release the next repo. Report the evidence, and propose a rollback: re-run the previous release's `deploy-prod` job (`gh run rerun <previous release run id> --repo <r> --job <deploy-prod job id>`, run only after "go"). That run also waits for the human's approval. Mention any migration that can't simply be rolled back.
+6. **If it fails:** stop. Don't release the next repo. Report the evidence, and propose a rollback. For a repo that deploys on release, re-run the previous release's `deploy-prod` job (`gh run rerun <previous release run id> --repo <r> --job <deploy-prod job id>`, run only after "go"). For a repo that deploys by hand, the human starts its deploy workflow with the previous tag (same inputs as above). Either way, the run waits for the human's approval. Mention any migration that can't simply be rolled back, and anything the workflow already reverted by itself.
 
 ### 5. Wrap up
 - **Summary table:**

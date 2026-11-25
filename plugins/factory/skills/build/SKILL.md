@@ -71,7 +71,7 @@ Follow the **autonomy settings above exactly**. They're the human's decision. Yo
 Run this for each started task. Separate tasks' chains can run in parallel, up to `max_parallel` developers at once.
 
 1. **Develop.** Dispatch the developer as described under *Dispatch* below. Keep the returned PR number. If the developer reports `factory:blocked` or no PR, the chain ends with **needs you**.
-2. **QA** (only if `auto_qa` is true and `no-qa` wasn't given). Dispatch the **qa-reviewer** subagent (`subagent_type: "factory:qa-reviewer"`) with the same prompt `/factory:qa review` uses: the PR `<owner/repo>#<pr>`, the clone path, the product repo path, the stack profile, and the binding contract / CR folder.
+2. **QA** (only if `auto_qa` is true and `no-qa` wasn't given). Dispatch the **qa-reviewer** subagent (`subagent_type: "factory:qa-reviewer"`) with the same prompt `/factory:qa review` uses: the PR `<owner/repo>#<pr>`, the clone path, the product repo path, the stack profile, and the binding contract / CR folder. For a hotfix, add "Hotfix PR: base `hotfix/vX.Y.Z`".
 3. **Fix loop.** While QA says **CHANGES REQUESTED** and fewer than `max_fix_rounds` fix rounds have run for this task in this run:
    - dispatch the same developer in **fix** mode (`mode: fix`, same PR); it reads the QA review on the PR
    - then dispatch QA again on the same PR
@@ -91,6 +91,7 @@ Run this for each started task. Separate tasks' chains can run in parallel, up t
 
 1. **Route by repo:** api → `factory:be-dev` (.NET); web → `factory:fe-dev` (React).
 2. **Load the issue:** `gh issue view N --repo <repo> --json number,title,body,labels,state`.
+   - **Hotfix?** If the body starts with `Hotfix: vX.Y.Z` (label `hotfix`), the **base branch** is `hotfix/vX.Y.Z`, and the build gate doesn't apply: skip the gate check below. The fix is for production, against the approved specs. Check that the branch exists (`git -C <clone> ls-remote --heads origin hotfix/vX.Y.Z`); if it doesn't, end as ⛔ Blocked with "run `/factory:hotfix <ref>` first".
    - **Gate check:** if the body contains `Change request: CR-NNN`, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" check build --scope CR-NNN`; otherwise run `… check build`. On `GATE BLOCKED`, end this chain as ⛔ Blocked.
    - **Binding contract:** for an *open* CR, `docs/factory/changes/CR-NNN-*/02-architecture/openapi.yaml` (the full contract). Otherwise, including merged CRs, `docs/factory/02-architecture/openapi.yaml`.
 3. **Check the local clone:** `git -C <path> status --porcelain` and `git -C <path> fetch origin`. It must exist and be clean; if not, stop and tell the user. Developers use their own worktrees, so one clean clone serves parallel tasks.
@@ -101,6 +102,7 @@ Run this for each started task. Separate tasks' chains can run in parallel, up t
    > Code repo clone: `<absolute path of the clone>` (GitHub: `<owner/repo>`)
    > Stack profile: `${CLAUDE_PLUGIN_ROOT}/stack/dotnet-react-azure.md`
    > Binding contract: `<absolute path chosen in step 2>`; change request: `<CR-NNN or none>`
+   > Base branch (hotfix tasks only; otherwise leave this line out): `hotfix/vX.Y.Z`. Follow your Hotfixes section.
    > CI failure (fix mode after a real CI failure only; otherwise leave this line out): `<test name>: <error>`, one line per failing test
    > Follow your instructions exactly. Return the PR URL, a summary of the changes, the test results, and anything you could not do.
 
@@ -114,6 +116,6 @@ Finish with one table, one row per task started in this run:
 
 Take the times from `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate" time report all --export`, run once after the last chain ends (it also refreshes the dashboard data). Then commit the time log, and only that file, in the product repo: `git -C <product repo> add .factory/timelog.jsonl` and `git -C <product repo> commit -m "factory: time log" -- .factory/timelog.jsonl` (skip it if git says there is nothing to commit; never push). Flag any task that went more than 50% over its estimate in one line.
 
-Then add one line: "Merging is yours. After you merge, `/factory:status` closes finished stories and epics, and `/factory:build next` continues."
+Then add one line: "Merging is yours. After you merge, `/factory:status` closes finished stories and epics, and `/factory:build next` continues." For a hotfix task, say instead: "Merge the PR into `hotfix/vX.Y.Z` on GitHub, then run `/factory:hotfix release`."
 
 You only orchestrate. Don't write code in this session.

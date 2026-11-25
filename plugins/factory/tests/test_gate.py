@@ -679,6 +679,60 @@ def test_bug_priority_ids_and_story_reopen():
         assert "close story S-02" in T("sync")
 
 
+def test_hotfix_tasks_rank_first_skip_gate_and_wait_for_backport():
+    import os
+    with tempfile.TemporaryDirectory() as repo:
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        run(repo, "init")
+        cfgp = Path(repo) / ".factory/config.json"
+        cfg = json.loads(cfgp.read_text())
+        cfg["repos"]["product"]["github"] = "me/bk-product"
+        cfg["repos"]["api"]["github"] = "me/bk-api"
+        cfg["repos"]["web"]["github"] = "me/bk-web"
+        cfgp.write_text(json.dumps(cfg))
+        # build gate is NOT open: features are gated, hotfixes are not
+        lab = lambda *n: [{"name": x} for x in n]
+        fx = {"issues": {
+            "me/bk-product": [],
+            "me/bk-api": [
+                {"number": 10, "title": "[T-01] feature", "state": "OPEN", "labels": lab("factory:task", "be"),
+                 "body": ""},
+                {"number": 30, "title": "[BUG-004] prod double booking", "state": "OPEN",
+                 "labels": lab("factory:task", "be", "bug", "severity:critical", "hotfix"),
+                 "body": "Hotfix: v1.4.1 (base: hotfix/v1.4.1)\n"},
+                {"number": 31, "title": "[BUG-005] other prod bug", "state": "OPEN",
+                 "labels": lab("factory:task", "be", "bug", "severity:high", "hotfix"),
+                 "body": "Hotfix: v1.4.1\n"}],
+            "me/bk-web": [
+                {"number": 40, "title": "[BUG-006] high bug", "state": "OPEN",
+                 "labels": lab("factory:task", "fe", "bug", "severity:critical"), "body": ""}]},
+            "prs": {},
+            "merged_prs": {"me/bk-api": [
+                {"number": 77, "body": "Closes #31", "headRefName": "factory/31-fix", "baseRefName": "hotfix/v1.4.1"},
+                {"number": 78, "body": "Closes #30", "headRefName": "factory/30-x", "baseRefName": "hotfix/v1.3.9"}]}}
+        f = Path(repo) / "fx.json"
+        f.write_text(json.dumps(fx))
+        env = dict(os.environ, FACTORY_GH_FIXTURE=str(f))
+        T = lambda *a: subprocess.run([sys.executable, str(GATE), "tasks", *a], cwd=repo,
+                                      capture_output=True, text=True, env=env).stdout
+        out = T("next")
+        assert out.startswith("NEXT: api#30 BUG-004 (story -, HOTFIX v1.4.1, base hotfix/v1.4.1)"), out
+        listing = T("list")
+        assert "GATED     api#10" in listing and "GATED     web#40" in listing, listing   # features/bugs gated
+        assert "BACKPORT  api#31" in listing and "prio=HOTFIX" in listing, listing      # merged into hotfix, not main
+        one = T("plan", "api#30")
+        assert "HOTFIX: v1.4.1  base branch: hotfix/v1.4.1" in one, one
+        hot = T("hotfix")
+        assert hot.startswith("HOTFIXES: 2 open") and "BACKPORT PENDING: api#31(v1.4.1)" in hot, hot
+        # back-merge PR opened to main -> in review; merged to main (issue closed) -> done
+        fx["prs"]["me/bk-api"] = [{"number": 79, "body": "Closes #31", "headRefName": "factory/31-backport"}]
+        f.write_text(json.dumps(fx))
+        assert "IN-REVIEW api#31" in T("list")
+        fx["issues"]["me/bk-api"][2]["state"] = "CLOSED"
+        f.write_text(json.dumps(fx))
+        assert "BACKPORT PENDING" not in T("hotfix")
+
+
 def test_spec_pack_extracts_only_referenced_specs():
     import os, shutil
     with tempfile.TemporaryDirectory() as repo:
@@ -853,6 +907,15 @@ def test_hook_exploration_and_spike_guards():
             assert h(b(f"cd {code} && gh pr create --fill")) == 2
             assert h(b("gh pr create --fill"), cwd=code) == 2
 
+        # hotfix branches: only reviewed PRs; a PR into one passes even with the build phase closed
+        assert h(b("gh pr create --repo me/api --fill")) == 2                          # build not open
+        assert h(b("gh pr create --repo me/api --base hotfix/v1.4.1 --fill")) == 0
+        assert h(b("gh pr create --repo me/api -B hotfix/v1.4.1 --fill")) == 0
+        assert h(b("git push -u origin factory/31-double-booking")) == 0
+        assert h(b("git push origin hotfix/v1.4.1")) == 2
+        assert h(b("git push origin HEAD:hotfix/v1.4.1")) == 2
+        assert h(b("git push origin HEAD:refs/heads/hotfix/v1.4.1")) == 2
+
         # closed explorations are frozen
         run(repo, "explore", "pre", "reject EXP-001 not needed")
         assert h(w("FINDINGS.md")) == 2
@@ -861,6 +924,7 @@ def test_hook_exploration_and_spike_guards():
 if __name__ == "__main__":
     test_spec_pack_extracts_only_referenced_specs()
     test_bug_priority_ids_and_story_reopen()
+    test_hotfix_tasks_rank_first_skip_gate_and_wait_for_backport()
     test_hook_prod_approval_is_human_only()
     test_ci_templates_are_valid_and_verify_versions()
     test_exploration_flow()

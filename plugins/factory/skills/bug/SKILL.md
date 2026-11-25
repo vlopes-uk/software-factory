@@ -104,6 +104,7 @@ Show the draft and ask "Create it? (go / edit)". On "go", run `gh issue create -
 Report the new issue link and what happens next:
 - If the story it implements was closed, `/factory:status` reopens it automatically until the fix is merged.
 - `critical` and `high` bugs are picked **before** feature work by `/factory:build next`. To fix it right now, run `/factory:build <repo-key>#<n>`.
+- **Found in prod, and `critical` or `high`?** A normal fix waits for the next release, and that release ships everything else on `main` too. If prod can't wait, suggest `/factory:hotfix <repo-key>#<n>`: it considers a rollback first, then fixes it on a branch cut from what prod runs and ships only that.
 - With autonomy `assisted` or `autopilot`, the fix runs through developer → QA → fix rounds automatically. You still merge.
 
 Never edit the specs or code yourself, and never close or merge anything.
